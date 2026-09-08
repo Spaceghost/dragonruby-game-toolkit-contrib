@@ -123,11 +123,37 @@ zig build check -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe
 zig build check -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe
 ```
 
-The repository workflow pins both the Zig download checksum and checkout action.
-It runs Debug and ReleaseSafe tests on Linux and compile-only checks for ARM64
-Linux, Windows x86-64, and both macOS architectures. Cross-compilation is not a
-runtime compatibility test. The workflow does not have the DragonRuby SDK and
-therefore does not compile the adapter or load the extension into DragonRuby.
+### Free GitHub-hosted CI
+
+The repository workflow pins the checkout action and every Zig archive checksum.
+It **executes** the Debug and ReleaseSafe Zig tests and C ABI/reference program
+natively on five standard GitHub-hosted runners:
+
+| Runner | Native execution target |
+| --- | --- |
+| `ubuntu-24.04` | x86-64 Linux / glibc |
+| `ubuntu-24.04-arm` | ARM64 Linux / glibc |
+| `windows-2022` | x86-64 Windows / GNU ABI |
+| `macos-15` | ARM64 macOS |
+| `macos-15-intel` | x86-64 macOS |
+
+GitHub makes standard hosted runner compute free for public repositories; see
+[GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+This workflow uses no larger runners, self-hosted machines, credentials beyond
+its read-only checkout token, paid services, uploaded artifacts, or cache
+storage. The free-public-repository condition does not apply automatically to
+private forks or larger runners.
+
+Pull requests trigger the suite; pushes to `main` test the merged result. This
+avoids duplicate push/PR suites, and concurrency cancels obsolete runs. Manual
+`workflow_dispatch` is available once this workflow exists on the default branch.
+Each job is capped at 15 minutes and records its actual test outcomes and
+validation scope in the Actions job summary.
+
+The x86-64 Linux job also performs compile-only cross-target checks. Those do not
+replace the native execution jobs. None of these jobs has the DragonRuby SDK:
+they do **not** compile `bridge.c`, load the extension into DragonRuby, or verify
+the rendered sprite. The SDK/runtime checks below remain a separate requirement.
 
 ## Tests with the real SDK/runtime
 
