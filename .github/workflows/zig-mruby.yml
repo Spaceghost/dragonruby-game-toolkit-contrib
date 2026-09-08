@@ -53,31 +53,28 @@ jobs:
         run: |
           export MRUBY_CONFIG="$GITHUB_WORKSPACE/samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb"
           cd .ci-mruby
-          rake -j2
+          if rake -j2 > "$RUNNER_TEMP/mruby-build.log" 2>&1; then
+            echo 'mruby build passed'
+          else
+            result=$?
+            tail -n 40 "$RUNNER_TEMP/mruby-build.log"
+            exit "$result"
+          fi
       - name: Load and exercise the actual bridge and Zig library
         working-directory: samples/12_c_extensions/11_zig_native_pixel_arrays
         shell: bash
         run: |
           for mode in Debug ReleaseSafe; do
-            zig build mruby-test -Doptimize="$mode" -Dcpu=baseline \
-              -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dmruby-boxing="$MRUBY_BOXING" --summary all
+            if zig build mruby-test -Doptimize="$mode" -Dcpu=baseline \
+              -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dmruby-boxing="$MRUBY_BOXING" --summary all \
+              > "$RUNNER_TEMP/mruby-$mode.log" 2>&1; then
+              tail -n 15 "$RUNNER_TEMP/mruby-$mode.log"
+            else
+              result=$?
+              tail -n 50 "$RUNNER_TEMP/mruby-$mode.log"
+              exit "$result"
+            fi
           done
-      - name: Diagnose failed integration
-        if: failure()
-        working-directory: samples/12_c_extensions/11_zig_native_pixel_arrays
-        shell: bash
-        run: |
-          set -eu
-          case "$MRUBY_BOXING" in
-            word) definitions='-DMRB_WORD_BOXING -DMRB_INT64' ;;
-            nan) definitions='-DMRB_NAN_BOXING -DMRB_INT32' ;;
-            none) definitions='-DMRB_NO_BOXING -DMRB_INT64' ;;
-          esac
-          zig cc -E -dM -std=c11 -DDRB_ZIG_TEST_HOST -DMRB_NO_PRESYM $definitions \
-            -Iapp -Itests/support -I"$GITHUB_WORKSPACE/.ci-mruby/include" app/bridge.c | grep -E '^#define MRB_(.*BOX|INT|API|INLINE)' || true
-          echo 'Upstream archive definitions:'
-          nm -g --defined-only "$GITHUB_WORKSPACE/.ci-mruby/build/host/lib/libmruby.a" | grep -E 'mrb_.*(boxing|cptr)' || true
-          find .zig-cache -type f \( -name 'libmruby_test_extension.so' -o -name 'mruby-bridge-test' \) -print -exec sh -c 'nm -D "$1" | grep mrb_' sh {} \; || true
       - name: Record scope
         if: always()
         shell: bash
