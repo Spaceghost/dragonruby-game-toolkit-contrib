@@ -1,6 +1,11 @@
 DR.ffi_misc.gtk_dlopen("ext")
 include FFI::CExt
 
+# DragonRuby invokes this before clearing args.state during DR.reset.
+def reset args
+  FFI::CExt.reset_scanner
+end
+
 def tick args
   args.state.rotation ||= 0
   update_scanner_texture
