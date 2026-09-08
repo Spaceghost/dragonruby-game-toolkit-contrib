@@ -1,31 +1,49 @@
-# Load from the DragonRuby console after the sample starts:
-# require "tests/smoke.rb"
-[
-  ["", 0],
-  ["no trailing newline", 0],
-  ["one\ntwo\n", 2],
-  ["\0\n\0\n", 2],
-  ["\r\n", 1],
-  ["\n" * 257, 257]
-].each do |input, expected|
-  actual = FFI::CExt.count_newlines input
-  raise "count_newlines: expected #{expected}, got #{actual}" unless actual == expected
-end
+# Shared verbatim by the real mruby host and the DragonRuby SDK smoke runner.
+module ZigSmoke
+  def self.check condition, message
+    raise message unless condition
+  end
 
-rejected_type = false
-begin
-  FFI::CExt.count_newlines 123
-rescue TypeError
-  rejected_type = true
-end
-raise "count_newlines accepted an Integer" unless rejected_type
+  def self.reject error_class
+    begin
+      yield
+    rescue error_class
+      return
+    end
+    raise "expected #{error_class}"
+  end
 
-rejected_arity = false
-begin
-  FFI::CExt.count_newlines
-rescue ArgumentError
-  rejected_arity = true
+  def self.run
+    samples = [["", 0], ["unterminated", 0], ["one\ntwo\n", 2],
+               ["\0\n\0\n", 2], ["\r\n", 1], ["\xff\n", 1],
+               ["\n" * 70000, 70000], ["x" * 70000, 0]]
+    samples.each do |input, expected|
+      before = input.dup
+      actual = FFI::CExt.count_newlines input
+      check(actual.is_a?(Integer) && actual == expected, "wrong newline count")
+      check(input == before, "input was modified")
+    end
+    65.times do |length|
+      input = ("x\n\0" * 64)[0, length]
+      check(FFI::CExt.count_newlines(input) == input.count("\n"), "tail mismatch")
+    end
+    [nil, false, true, 123, 1.5, [], {}, :text, Object.new].each do |input|
+      reject(TypeError) { FFI::CExt.count_newlines input }
+    end
+    reject(ArgumentError) { FFI::CExt.count_newlines }
+    reject(ArgumentError) { FFI::CExt.count_newlines("", "extra") }
+    reject(ArgumentError) { FFI::CExt.update_scanner_texture(1) }
+    reject(ArgumentError) { FFI::CExt.reset_scanner(1) }
+    check(FFI::CExt.count_newlines("\n".freeze) == 1, "frozen string failed")
+    mutable = "x\0x"
+    check(FFI::CExt.count_newlines(mutable) == 0, "mutable string failed")
+    mutable.replace("\n\0\n")
+    check(FFI::CExt.count_newlines(mutable) == 2, "stale input pointer")
+    check(FFI::CExt.reset_scanner.nil?, "reset result")
+    check(FFI::CExt.update_scanner_texture.nil?, "scanner result")
+    FFI::CExt.reset_scanner
+    true
+  end
 end
-raise "count_newlines accepted zero arguments" unless rejected_arity
-raise "scanner did not return nil" unless FFI::CExt.update_scanner_texture.nil?
+ZigSmoke.run
 puts "Zig native extension smoke tests passed."

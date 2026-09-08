@@ -18,6 +18,12 @@ pub fn build(b: *std.Build) void {
         else => "custom",
     };
     const platform = b.option([]const u8, "platform", "DragonRuby native directory name") orelse default_platform;
+    for (platform) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') {
+            std.debug.panic("-Dplatform must be a single native directory name", .{});
+        }
+    }
+    if (platform.len == 0) std.debug.panic("-Dplatform cannot be empty", .{});
     const suffix: []const u8 = switch (target.result.os.tag) {
         .windows => "dll",
         .macos => "dylib",
@@ -62,7 +68,86 @@ pub fn build(b: *std.Build) void {
     check.dependOn(&unit.step);
     check.dependOn(&abi.step);
 
-    // Only this artifact requires the proprietary SDK. Tests never use a mock ABI.
+    // Load the native exports from an actual shared library on each test OS.
+    const shared = b.addLibrary(.{
+        .name = "drb_zig_dynamic",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("app/native.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    const dynamic_abi = b.addExecutable(.{
+        .name = "zig-dynamic-abi-test",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    dynamic_abi.root_module.addIncludePath(b.path("app"));
+    dynamic_abi.root_module.addCSourceFile(.{
+        .file = b.path("tests/abi.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-UNDEBUG", "-DDRB_ZIG_DYNAMIC" },
+    });
+    if (target.result.os.tag == .linux) dynamic_abi.root_module.linkSystemLibrary("dl", .{});
+    const run_dynamic = b.addRunArtifact(dynamic_abi);
+    run_dynamic.addArtifactArg(shared);
+    test_step.dependOn(&run_dynamic.step);
+    check.dependOn(&dynamic_abi.step);
+    check.dependOn(&shared.step);
+
+    // Opt-in real mruby integration. This fixture is NEVER on production paths.
+    if (b.option([]const u8, "mruby-root", "Built upstream mruby test checkout")) |mruby| {
+        const boxing = b.option(enum { word, nan, none }, "mruby-boxing", "Test VM boxing configuration") orelse .word;
+        const flags: []const []const u8 = &.{
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-UNDEBUG",
+            "-DDRB_ZIG_TEST_HOST",
+            "-DMRB_NO_PRESYM",
+            switch (boxing) {
+                .word => "-DMRB_WORD_BOXING",
+                .nan => "-DMRB_NAN_BOXING",
+                .none => "-DMRB_NO_BOXING",
+            },
+            if (boxing == .nan) "-DMRB_INT32" else "-DMRB_INT64",
+        };
+        const test_extension = b.addLibrary(.{
+            .name = "mruby_test_extension",
+            .linkage = .dynamic,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("app/native.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        test_extension.root_module.addIncludePath(b.path("app"));
+        test_extension.root_module.addIncludePath(b.path("tests/support"));
+        test_extension.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
+        test_extension.root_module.addCSourceFile(.{ .file = b.path("app/bridge.c"), .flags = flags });
+        const host = b.addExecutable(.{
+            .name = "mruby-bridge-test",
+            .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+        });
+        host.root_module.addIncludePath(b.path("tests/support"));
+        host.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
+        host.root_module.addCSourceFile(.{ .file = b.path("tests/mruby_host.c"), .flags = flags });
+        host.root_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ mruby, "build/host/lib/libmruby.a" }) });
+        host.root_module.linkSystemLibrary("m", .{});
+        host.root_module.linkSystemLibrary("dl", .{});
+        const run_host = b.addRunArtifact(host);
+        run_host.addArtifactArg(test_extension);
+        run_host.addFileArg(b.path("tests/smoke.rb"));
+        b.step("mruby-test", "Execute Ruby through the dynamic C/Zig adapter (not the SDK)").dependOn(&run_host.step);
+    }
+
+    // Only this artifact uses the matching proprietary SDK, never test headers.
     const extension = b.addLibrary(.{
         .name = "ext",
         .linkage = .dynamic,
@@ -76,6 +161,7 @@ pub fn build(b: *std.Build) void {
     extension.root_module.addIncludePath(b.path("app"));
     extension.root_module.addIncludePath(.{ .cwd_relative = sdk });
     extension.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "include" }) });
+    extension.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "mruby/include" }) });
     extension.root_module.addCSourceFile(.{
         .file = b.path("app/bridge.c"),
         .flags = &.{ "-std=c11", "-Wall", "-Wextra" },
