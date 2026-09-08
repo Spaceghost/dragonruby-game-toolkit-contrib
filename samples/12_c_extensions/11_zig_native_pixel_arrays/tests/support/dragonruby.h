@@ -13,11 +13,14 @@
 #include <mruby.h>
 #include <stdint.h>
 #define DRB_FFI_EXPORT __attribute__((visibility("default")))
+/* mrb_int is also a function-like conversion macro. A named function type
+   avoids putting '(' immediately after the return type in a pointer field. */
+typedef mrb_int drb_test_get_args_fn(mrb_state *, const char *, ...);
 typedef struct drb_api_t {
     struct RClass *(*mrb_module_get)(mrb_state *, const char *);
     struct RClass *(*mrb_define_module_under)(mrb_state *, struct RClass *, const char *);
     void (*mrb_define_module_function)(mrb_state *, struct RClass *, const char *, mrb_func_t, mrb_aspec);
-    mrb_int (*mrb_get_args)(mrb_state *, const char *, ...);
+    drb_test_get_args_fn *mrb_get_args;
     void (*drb_upload_pixel_array)(const char *, int, int, const uint32_t *);
 } drb_api_t;
 #endif
