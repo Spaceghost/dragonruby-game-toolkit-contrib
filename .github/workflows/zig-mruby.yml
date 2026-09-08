@@ -38,6 +38,7 @@ jobs:
           repository: mruby/mruby
           ref: a309524d0bc90eef077a24634db2495a6f68e318 # 3.4.0, test host only
           path: .ci-mruby
+          submodules: recursive
           persist-credentials: false
       - name: Install checksum-pinned Zig
         shell: bash
