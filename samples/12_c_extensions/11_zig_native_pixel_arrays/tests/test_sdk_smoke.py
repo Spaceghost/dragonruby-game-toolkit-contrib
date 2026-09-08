@@ -53,7 +53,8 @@ class StagingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="test SDK with spaces ")
         self.addCleanup(self.temp.cleanup)
-        self.sdk = Path(self.temp.name)
+        # macOS /var aliases and Windows short paths resolve to canonical paths.
+        self.sdk = Path(self.temp.name).resolve()
         (self.sdk / "include").mkdir()
         (self.sdk / "include/dragonruby.h").write_text("/* test placeholder */")
         (self.sdk / "include/mruby.h").write_text("/* test placeholder */")

@@ -1,7 +1,8 @@
 # Build a real, pinned upstream mruby for the test host, not a second game VM.
 MRuby::Build.new do |conf|
-  toolchain :gcc
-  conf.gembox 'default'
+  conf.toolchain :gcc
+  # Keep the build graph and compiler configuration in agreement, including mrbc.
+  conf.disable_presym
   boxing = ENV.fetch('MRUBY_BOXING', 'word')
   definitions = {
     'word' => ['MRB_WORD_BOXING', 'MRB_INT64'],
@@ -9,5 +10,6 @@ MRuby::Build.new do |conf|
     'none' => ['MRB_NO_BOXING', 'MRB_INT64']
   }.fetch(boxing)
   conf.cc.defines.concat definitions
-  conf.cc.defines << 'MRB_NO_PRESYM'
+  # Configure the VM before gems inherit its compiler options.
+  conf.gembox 'default'
 end
