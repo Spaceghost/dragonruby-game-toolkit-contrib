@@ -6,6 +6,10 @@
 #endif
 #ifndef DRB_ZIG_TEST_API_H
 #define DRB_ZIG_TEST_API_H
+/* C11 preprocessing paths need not provide the C attribute feature query. */
+#ifndef __has_c_attribute
+#define __has_c_attribute(attribute) 0
+#endif
 #include <mruby.h>
 #include <stdint.h>
 #define DRB_FFI_EXPORT __attribute__((visibility("default")))
