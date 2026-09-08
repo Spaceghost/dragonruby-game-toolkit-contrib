@@ -129,7 +129,7 @@ pub fn build(b: *std.Build) void {
         });
         test_extension.root_module.addIncludePath(b.path("app"));
         test_extension.root_module.addIncludePath(b.path("tests/support"));
-        test_extension.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
+        test_extension.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
         test_extension.root_module.addCSourceFile(.{ .file = b.path("app/bridge.c"), .flags = flags });
         const host = b.addExecutable(.{
             .name = "mruby-bridge-test",
@@ -138,7 +138,7 @@ pub fn build(b: *std.Build) void {
         // Header helpers in the loaded adapter resolve to the existing VM.
         host.rdynamic = true;
         host.root_module.addIncludePath(b.path("tests/support"));
-        host.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
+        host.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
         host.root_module.addCSourceFile(.{ .file = b.path("tests/mruby_host.c"), .flags = flags });
         host.root_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ mruby, "build/host/lib/libmruby.a" }) });
         host.root_module.linkSystemLibrary("m", .{});
