@@ -115,6 +115,8 @@ jobs:
           with open(os.environ['GITHUB_PATH'], 'a', encoding='utf-8') as output:
               output.write(str(binary_dir) + '\n')
           print(f'Installed verified Zig {actual} for {os.environ["ZIG_ARCHIVE"]}')
+      - name: SDK smoke orchestration tests (no SDK)
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Zig formatting
         run: zig fmt --check build.zig app
       - name: Shell and Ruby syntax
@@ -123,6 +125,7 @@ jobs:
           sh -n pre.sh
           ruby -c app/main.rb
           ruby -c tests/smoke.rb
+          ruby -c tests/mruby_config.rb
       - name: Execute Debug unit and C ABI tests
         id: debug
         run: zig build test -Dtarget="$ZIG_TARGET" -Doptimize=Debug -Dcpu=baseline --summary all
@@ -146,7 +149,8 @@ jobs:
             echo
             echo "- Debug tests: $DEBUG_RESULT"
             echo "- ReleaseSafe tests: $RELEASE_RESULT"
-            echo "- Zig unit tests and the C ABI/reference program execute on this runner."
+            echo "- Zig unit tests, static/dynamic C ABI and protected-page tests execute on this runner."
+            echo "- Python tests cover SDK smoke orchestration, not the proprietary SDK."
             echo "- The DragonRuby SDK adapter and graphical runtime are not tested here."
             echo "- Standard GitHub-hosted runner; no uploaded artifacts or cache storage."
           } >> "$GITHUB_STEP_SUMMARY"

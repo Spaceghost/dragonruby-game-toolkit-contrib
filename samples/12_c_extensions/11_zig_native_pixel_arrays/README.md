@@ -1,32 +1,34 @@
 # Zig native pixel arrays and SIMD
 
-A parallel Zig implementation of `../03_native_pixel_arrays`. The C reference
-is unchanged. Ruby still calls `FFI::CExt.update_scanner_texture` and draws the
-same rotating scanner sprite. An additional `FFI::CExt.count_newlines(string)`
-method demonstrates useful buffer processing with explicit SIMD.
+A parallel Zig implementation of `../03_native_pixel_arrays`, plus a useful
+SIMD byte-scanning example. The original C samples remain unchanged.
 
-Zig implements the algorithms and scanner state. A small C adapter includes the
-matching DragonRuby SDK headers and uses its `drb_api_t` table. Do not link a
-second mruby, recreate `mrb_value` in Zig, or use headers from an unrelated Ruby
-installation. There is no Nelua or Lua dependency.
+```ruby
+FFI::CExt.update_scanner_texture             # upload the next scanner frame
+FFI::CExt.reset_scanner                      # return to the initial frame
+FFI::CExt.count_newlines("one\ntwo\n")       # => 2
+FFI::CExt.count_newlines("\0\n")            # => 1
+```
+
+Zig owns the algorithms and scanner state. A small C adapter uses the matching
+DragonRuby SDK's `drb_api_t` table and mruby headers. Do not recreate `mrb_value`
+in Zig or link a second mruby into the extension. Nelua and Lua are not required.
 
 ## Build and run
 
-Install **Zig 0.16.0**, which is pinned in `.zig-version` and checked by
-`build.zig`. A DragonRuby distribution with native-extension support and its
-matching headers is required to build or run the extension. This public contrib
-repository alone does not contain the SDK or the DragonRuby executable.
+Install **Zig 0.16.0**, pinned in `.zig-version` and checked by `build.zig`.
+Building the game extension additionally requires a DragonRuby distribution
+with native-extension support and matching SDK headers. This public repository
+contains neither those proprietary headers nor the DragonRuby executable.
 
-Place this sample under `samples/12_c_extensions` in that distribution. From
-this sample's directory:
+Place the sample under `samples/12_c_extensions` in that distribution:
 
 ```sh
 ./pre.sh
 ../../../dragonruby .
 ```
 
-On Windows, run `pre.bat`, then `..\..\..\dragonruby.exe .`.
-
+On Windows run `pre.bat`, then `..\..\..\dragonruby.exe .`.
 For an SDK elsewhere:
 
 ```sh
@@ -34,17 +36,12 @@ DRB_ROOT=/absolute/path/to/dragonruby ./pre.sh
 /absolute/path/to/dragonruby/dragonruby .
 ```
 
-Set `ZIG` to the executable path when it is not on PATH. Set `DRB_ROOT` before
+Set `ZIG` to the Zig executable path when necessary. Set `DRB_ROOT` before
 running `pre.bat` on Windows. Relative SDK paths are relative to this sample.
-The build scripts use ReleaseSafe, a baseline CPU, and install one extension:
-`native/linux-amd64/ext.so`, `native/macos/ext.dylib`, or
-`native/windows-amd64/ext.dll`.
+Both launchers build in ReleaseSafe for a baseline CPU. Zig's C toolchain
+compiles the adapter; no separate Clang or `dragonruby-bind` is needed.
 
-The build system compiles `bridge.c` with Zig's C toolchain (zig-cc) and links it
-with Zig code. A separate Clang installation or `dragonruby-bind` invocation is
-not needed for this handwritten adapter.
-
-The equivalent direct command, for an x86-64 glibc Linux runtime, is:
+The corresponding direct command for x86-64 Linux is:
 
 ```sh
 zig build extension --prefix . -Doptimize=ReleaseSafe \
@@ -52,19 +49,18 @@ zig build extension --prefix . -Doptimize=ReleaseSafe \
   -Ddragonruby-root=/absolute/path/to/dragonruby
 ```
 
-`--prefix .` matters: without it, `zig build` installs under `zig-out/`.
-The shell script selects a glibc Linux target deliberately, even when building
-on Alpine. Match the architecture, libc, deployment minimum, and SDK to the
-**DragonRuby executable**, not just the build host. For cross-builds, override
-`ZIG_TARGET` and `DRB_PLATFORM` together. Mac builds are architecture-specific,
-not universal binaries. Other target folder names require `-Dplatform=...`;
-unsupported automatic mappings use `custom` rather than claiming compatibility.
-Apple platform builds may need the corresponding SDK/toolchain. Mobile and web
+The installed file is `native/linux-amd64/ext.so`, `native/macos/ext.dylib`, or
+`native/windows-amd64/ext.dll`. Without `--prefix .`, installation is under
+`zig-out/`. Match the target architecture, libc, deployment minimum and SDK to
+the **DragonRuby executable**, not merely the build host. Linux defaults to
+glibc even when building on Alpine. Override `ZIG_TARGET` and `DRB_PLATFORM`
+together for cross-builds. Unmapped targets require an explicit platform name;
+macOS outputs are architecture-specific, not universal binaries. Mobile and web
 extension packaging are outside this sample's scope.
 
-## The SIMD part
+## SIMD, ownership and errors
 
-The core of `app/kernels.zig` is:
+The newline counter's core is:
 
 ```zig
 const bytes: @Vector(16, u8) = data[i..][0..16].*;
@@ -72,110 +68,115 @@ const flags = @select(u8, bytes == newline, ones, zeros);
 count += @reduce(.Add, flags);
 ```
 
-`newline`, `ones`, and `zeros` are sixteen-lane vectors filled with `@splat`.
-The first line loads sixteen bytes through an ordinary byte-aligned array.
-The comparison produces sixteen booleans, `@select` maps them to zero or one,
-and `@reduce` sums them. A block contributes at most 16, so the per-block u8 sum
-cannot overflow. The total uses `usize`.
+The three constants are sixteen-lane vectors created with `@splat`. The load
+needs only byte alignment. Comparison produces sixteen booleans, selection maps
+them to zero or one, and reduction counts matches. The per-block sum is at most
+16; the total uses `usize`. Only complete blocks are loaded. A scalar tail
+handles the final 0..15 bytes without reading outside the buffer.
 
-Only complete blocks are loaded; a scalar tail handles the final 0..15 bytes.
-The pointer is never cast to a more strictly aligned vector pointer. Inputs can
-contain NULs: the C adapter passes the Ruby string's byte length, not `strlen`.
-This counts LF bytes, not logical lines or Unicode line separators.
+This counts LF bytes, not logical lines or Unicode line separators. Embedded
+NULs are ordinary input. `fillPixels` uses four-u32 stores and a scalar tail;
+for production workloads compare it with `@memset` rather than assuming a
+speedup. The 10x10 scanner is a teaching example. No performance gain or specific
+instruction sequence is promised. This sample is not a gzip decoder.
 
-`fillPixels` similarly stores four u32 pixels per vector, with a scalar tail.
-The scanner's 10x10 image is a teaching example, not a workload needing native
-optimization. The compiler may lower vector operations to different instruction
-sequences or replace fills with other operations. No speedup or particular
-instruction count is claimed; benchmark real buffers and inspect target code.
-This does not implement gzip decoding or a DEFLATE walker.
+The complete native contract is `app/native.h`. Kernels allocate no heap memory,
+retain no caller pointers and never call Ruby. Input validation and Ruby
+exceptions stay in the C adapter, outside Zig frames. All three methods validate
+arity before changing state or entering Zig. Scanner exports share one instance
+and are main-thread-only; the newline counter has no mutable global state.
+Registration and `reset_scanner` reset the animation. The original repeated last
+row at the bounce and stack pixel-buffer upload lifetime are preserved.
 
-Try from the DragonRuby console:
+## Validation layers
 
-```ruby
-FFI::CExt.count_newlines("one\ntwo\n") # => 2
-FFI::CExt.count_newlines("\0\n")      # => 1
-```
+These layers are intentionally separate. A passing upstream mruby harness is
+not a claim about the proprietary DragonRuby API table layout or renderer.
 
-## Tests without the DragonRuby SDK
-
-From this sample's directory:
+### Native tests: no SDK
 
 ```sh
 zig build test
 zig build test -Doptimize=ReleaseSafe -Dcpu=baseline
 zig fmt --check build.zig app
+python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-These execute the Zig kernels, not a C replacement for them. Tests include all
-65,536 possible newline masks in one sixteen-byte block, every input length
-0..257 at 32 offsets, binary/NUL data, fill boundaries, the scanner bounce
-sequence, independent scanner instances, and resetting the exported scanner.
+Zig tests cover all 65,536 newline masks in a sixteen-byte block, lengths 0..257
+at 32 offsets, binary input, vector-fill boundaries, scanner instances and reset.
+The C ABI program compares 10,000 frames against the original C algorithm.
+It runs both statically linked and through an actual shared-library loader.
+OS-protected pages catch overreads/overwrites at allocation boundaries; read-only
+input pages catch unintended writes. Windows uses VirtualProtect/LoadLibrary;
+Linux and macOS use mprotect/dlopen. Empty input may have a NULL or inaccessible
+pointer because zero bytes must be read.
 
-`tests/abi.c` calls the Zig exports using `app/native.h`, compares 10,000 scanner
-frames against a scalar reference derived from the original C sample, and checks
-buffer guards and newline counts. The ABI test requires no mruby mock.
+The Python tests verify SDK orchestration only. They test argument boundaries,
+paths with spaces, temporary staging, missing inputs, version checks, failed
+builds, stale/partial completion markers, premature zero exits and timeouts.
+Actual child processes verify cleanup. They are not SDK compatibility tests.
 
-Compile-only cross-target checks can use, for example:
+### Real mruby integration: no DragonRuby SDK
+
+`.github/workflows/zig-mruby.yml` builds pinned upstream mruby 3.4.0, including
+its pinned parser submodule, in word-boxed, NaN-boxed and unboxed configurations.
+The host dynamically loads the **actual `app/bridge.c` plus Zig** and runs
+`tests/smoke.rb`, checks 10,000 uploaded frames per VM, rejection without state
+mutation, re-registration, garbage collection and three fresh VM lifetimes.
+
+Only the small host API table and pixel upload sink are test substitutes.
+`tests/support/dragonruby.h` is explicitly not the SDK. Production build include
+paths never reference it, and its guard rejects accidental production use.
+The host has one real mruby; the extension must not link another runtime.
+To reproduce after building mruby with `tests/mruby_config.rb`:
 
 ```sh
-zig build check -Dtarget=aarch64-linux-gnu -Doptimize=ReleaseSafe
-zig build check -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe
+zig build mruby-test -Dmruby-root=/absolute/path/to/mruby \
+  -Dmruby-boxing=word -Doptimize=ReleaseSafe
 ```
 
-### Free GitHub-hosted CI
+Match `MRUBY_BOXING` used by rake to `-Dmruby-boxing`; the harness and VM must
+share their integer width and value representation. Consult CI results for
+validation of a particular commit, rather than treating test source as a pass.
 
-The repository workflow pins the checkout action and every Zig archive checksum.
-It **executes** the Debug and ReleaseSafe Zig tests and C ABI/reference program
-natively on five standard GitHub-hosted runners:
+### Matching DragonRuby SDK and runtime
 
-| Runner | Native execution target |
-| --- | --- |
-| `ubuntu-24.04` | x86-64 Linux / glibc |
-| `ubuntu-24.04-arm` | ARM64 Linux / glibc |
-| `windows-2022` | x86-64 Windows / GNU ABI |
-| `macos-15` | ARM64 macOS |
-| `macos-15-intel` | x86-64 macOS |
+With Python 3.10+ and a licensed matching SDK on a machine that can run the game:
 
-GitHub makes standard hosted runner compute free for public repositories; see
-[GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-This workflow uses no larger runners, self-hosted machines, credentials beyond
-its read-only checkout token, paid services, uploaded artifacts, or cache
-storage. The free-public-repository condition does not apply automatically to
-private forks or larger runners.
+```sh
+python tools/sdk_smoke.py --sdk /absolute/path/to/dragonruby
+```
 
-Pull requests trigger the suite; pushes to `main` test the merged result. This
-avoids duplicate push/PR suites, and concurrency cancels obsolete runs. Manual
-`workflow_dispatch` is available once this workflow exists on the default branch.
-Each job is capped at 15 minutes and records its actual test outcomes and
-validation scope in the Actions job summary.
+The command stages an isolated copy, builds and installs the actual extension,
+loads it in DragonRuby, runs the shared Ruby assertions, and calls the original
+sample's tick for 60 frames. It requires a fresh per-run completion marker; a
+zero exit status, an old marker or a missing library cannot pass. Ruby failures
+and timeouts return nonzero with the log tail. The game process is terminated
+and the temporary copy removed; the source checkout is not rewritten.
 
-The x86-64 Linux job also performs compile-only cross-target checks. Those do not
-replace the native execution jobs. None of these jobs has the DragonRuby SDK:
-they do **not** compile `bridge.c`, load the extension into DragonRuby, or verify
-the rendered sprite. The SDK/runtime checks below remain a separate requirement.
-
-## Tests with the real SDK/runtime
-
-Build and start the sample, confirm that the sprite renders and bounces, then
-load this in its console:
+Use `--zig`, `--runtime`, paired `--target`/`--platform`, `--timeout`, and
+`--build-timeout` to override defaults. This is a runtime smoke test, not an image
+comparison: inspect the rotating scanner visually before release. The command
+does not download an SDK or fall back to test headers when it is absent.
+The same assertions may be run from the game's console:
 
 ```ruby
 require "tests/smoke.rb"
 ```
 
-This checks Ruby argument validation, empty/binary strings, a multi-block input,
-and the scanner call. It does not replace visually checking the rendered sprite.
+## Free hosted CI
 
-## Boundary and ownership
+Native Debug and ReleaseSafe jobs use standard GitHub-hosted runners:
+`ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-2022`, `macos-15`, and
+`macos-15-intel`. Linux x86-64 also cross-compiles the native tests for the other
+four targets. mruby integration uses three standard Ubuntu jobs. Cross-building
+is distinct from native execution, and neither replaces the real SDK test.
 
-`app/native.h` documents the complete C/Zig boundary. The kernels allocate no
-heap memory, retain no caller pointers, and never call Ruby. Ruby validation and
-exceptions stay in the C adapter, outside Zig stack frames. The scanner exports
-share one instance and are main-thread-only; independent Zig `Scanner` instances
-are available internally. The newline counter has no mutable global state.
+GitHub's standard runner compute is free for public repositories under its
+current billing policy; private forks and larger runners differ. Workflows
+require no repository secrets, self-hosted machines, paid services, uploaded
+artifacts or cache storage. Checkout commits and compiler checksums are pinned.
+PRs trigger tests, main pushes check merged code, and concurrency cancels
+superseded runs. The proprietary SDK/runtime is not provisioned in public CI.
 
-The scanner uses a stack pixel buffer and uploads it immediately, preserving the
-original C sample's buffer lifetime and behavior, including its repeated final
-row at the bounce. The original C sample's MIT attribution is retained in
-`license-for-sample.txt`.
+The original C example's MIT attribution is retained in `license-for-sample.txt`.
