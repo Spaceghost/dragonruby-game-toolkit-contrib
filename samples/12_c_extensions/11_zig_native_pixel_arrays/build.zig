@@ -135,6 +135,8 @@ pub fn build(b: *std.Build) void {
             .name = "mruby-bridge-test",
             .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
         });
+        // Header helpers in the loaded adapter resolve to the existing VM.
+        host.rdynamic = true;
         host.root_module.addIncludePath(b.path("tests/support"));
         host.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
         host.root_module.addCSourceFile(.{ .file = b.path("tests/mruby_host.c"), .flags = flags });
