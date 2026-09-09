@@ -121,8 +121,8 @@
         "02_intermediate/native/ext-bindings.c": "1de9ab1078416c9363e71951e5520ca8c305d513",
         "02_intermediate/regex-capi/ctest/test.c": "ba3301c33fca4ad6b9713044aae7f9ec731fd6ed",
         "02_intermediate/regex-capi/examples/iter.c": "47c83e806f8bcc99a57b719123a831a29ae4df40",
-        "02_intermediate/regex-capi/include/.#rure.h": "666a32720dfc187648331a0e179337c94ac6d760d",
-        "02_intermediate/regex-capi/include/rure.h": "9d024c93d8e61f0f4060d7631dead6b3e390d5da"
+        "02_intermediate/regex-capi/include/.#rure.h": "b732f6826b1d33649575abf953ce6862df034fed",
+        "02_intermediate/regex-capi/include/rure.h": "789f204382d8397170883015bf43421a7f459b3e"
       }
     }
   ],
