@@ -11,7 +11,6 @@ fn library(b: *std.Build, name: []const u8, source: []const u8, target: std.Buil
     const lib = b.addLibrary(.{ .name = name, .linkage = .static, .root_module = b.createModule(.{
         .root_source_file = path(b, source), .target = target, .optimize = optimize, .link_libc = true,
     }) });
-    // These archives are also linked by the host linker for --wrap instrumentation.
     lib.bundle_compiler_rt = true;
     return lib;
 }
@@ -23,8 +22,8 @@ fn object(b: *std.Build, name: []const u8, source: std.Build.LazyPath, target: s
     return obj;
 }
 fn link(b: *std.Build, name: []const u8, objects: []const *std.Build.Step.Compile, libraries: []const *std.Build.Step.Compile, wrapped: bool, mruby: ?[]const u8, sqlite: bool) void {
-    // Compilation is exclusively Zig/Clang with one resolved CPU and mode. The
-    // host linker is used only for Linux GNU --wrap, without LTO or recompilation.
+    // Compilation is exclusively Zig/Clang with one resolved CPU and mode.
+    // Host cc only links the objects; timing does not use GNU --wrap or LTO.
     const cmd = b.addSystemCommand(&.{ "cc", "-no-pie", "-o" });
     const output = cmd.addOutputFileArg(name);
     for (objects) |obj| cmd.addArtifactArg(obj);
@@ -70,6 +69,15 @@ pub fn build(b: *std.Build) void {
     } else {
         const legacy = library(b, "measure_legacy", "../../11_zig_native_pixel_arrays/app/native.zig", target, optimize);
         const sql = library(b, "measure_sqlite", "../sqlite/sqlite.zig", target, optimize);
+        sql.root_module.linkSystemLibrary("sqlite3", .{});
+        const direct = library(b, "measure_direct_sqlite", "../sqlite/series.zig", target, optimize);
+        direct.root_module.linkSystemLibrary("sqlite3", .{});
+        b.installArtifact(direct);
+        const audit = b.addSystemCommand(&.{ "python3", "../tools/check_direct_calls.py" });
+        audit.addArtifactArg(direct);
+        const audit_output = audit.addOutputFileArg("direct-call-audit.json");
+        b.getInstallStep().dependOn(&b.addInstallFile(audit_output, "direct-call-audit.json").step);
+        const direct_c = object(b, "measure-direct-c", path(b, "sqlite_direct.c"), target, optimize, &common, null);
         const reference = b.addSystemCommand(&.{ "python3", "../tools/reference.py" });
         reference.addFileArg(path(b, "../../04_handcrafted_extension_advanced/native/ext-bindings.c"));
         reference.addFileArg(path(b, "../../03_native_pixel_arrays/app/ext.c"));
@@ -87,7 +95,7 @@ pub fn build(b: *std.Build) void {
             } else link(b, name, &.{ host, original, controls, regex, noop }, &.{ kernels, legacy }, false, null, false);
             const sql_name = if (profile) "sqlite-alloc" else "sqlite-time";
             const sql_host = object(b, sql_name, path(b, "sqlite.c"), target, optimize, if (profile) &prof else &common, null);
-            link(b, sql_name, &.{sql_host}, &.{sql}, false, null, true);
+            link(b, sql_name, &.{ sql_host, direct_c }, &.{ sql, direct }, false, null, true);
         }
     }
 }

@@ -2,6 +2,8 @@
 #include "sqlite.h"
 #include <sqlite3.h>
 
+int drbz_direct_sql_series(sqlite3 *, const char *, size_t, uint32_t, int, int, uint64_t *);
+int drbz_c_direct_sql_series(sqlite3 *, const char *, size_t, uint32_t, int, int, uint64_t *);
 static drbz_database database;
 static uint32_t parameter_seed;
 #ifdef DRBZ_PROFILE
@@ -60,8 +62,17 @@ static void install_meter(void) {
 #endif
 static void reset(const bench_case *c, uint32_t seed) { (void)c; parameter_seed = seed; }
 static uint64_t batch(const bench_case *c, unsigned variant, size_t n) {
-    (void)c;
     const char *sql = "SELECT CAST(?1 AS TEXT)";
+    if (c->detail && variant < 2) {
+        uint64_t checksum = 0;
+        int reuse = c->detail != 3, clear = c->detail == 1;
+        int code = variant ? drbz_direct_sql_series(database.handle, sql, n, parameter_seed, reuse, clear, &checksum)
+                           : drbz_c_direct_sql_series(database.handle, sql, n, parameter_seed, reuse, clear, &checksum);
+        assert(code == SQLITE_OK && sqlite3_next_stmt(database.handle, NULL) == NULL);
+        return checksum;
+    }
+    // The old checked adapter remains an explicit control, not the Zig hot path.
+    if (c->detail) variant = 3;
     int reuse = variant >= 2, zig = variant % 2;
     sqlite3_stmt *cs = NULL;
     drbz_statement zs; drbz_sql_statement_init(&zs);
@@ -85,6 +96,7 @@ static uint64_t batch(const bench_case *c, unsigned variant, size_t n) {
             if (!reuse) assert(sqlite3_prepare_v3(database.handle, sql, -1, 0, &cs, NULL) == SQLITE_OK);
             assert(sqlite3_bind_int64(cs, 1, value) == SQLITE_OK);
             assert(sqlite3_step(cs) == SQLITE_ROW);
+            assert(sqlite3_column_type(cs, 0) != SQLITE_NULL);
             const unsigned char *p = sqlite3_column_text(cs, 0); assert(p);
             int length = sqlite3_column_bytes(cs, 0);
             for (int j = 0; j < length; ++j) checksum += p[j];
@@ -100,6 +112,26 @@ static uint64_t batch(const bench_case *c, unsigned variant, size_t n) {
     assert(sqlite3_next_stmt(database.handle, NULL) == NULL);
     return checksum;
 }
+static void verify_direct(void) {
+    const size_t lengths[] = {0, 1, 7, 16, 17, 1024};
+    const uint32_t seeds[] = {0, 72819, UINT32_MAX - 3};
+    for (int reuse = 0; reuse < 2; ++reuse) for (int clear = 0; clear < 2; ++clear)
+        for (size_t i = 0; i < sizeof lengths / sizeof *lengths; ++i)
+            for (size_t j = 0; j < sizeof seeds / sizeof *seeds; ++j) {
+                uint64_t a = UINT64_MAX, b = UINT64_MAX;
+                assert(drbz_c_direct_sql_series(database.handle, "SELECT CAST(?1 AS TEXT)", lengths[i], seeds[j], reuse, clear, &a) == SQLITE_OK);
+                assert(drbz_direct_sql_series(database.handle, "SELECT CAST(?1 AS TEXT)", lengths[i], seeds[j], reuse, clear, &b) == SQLITE_OK);
+                assert(a == b && sqlite3_next_stmt(database.handle, NULL) == NULL);
+            }
+    const char *sql[] = {"invalid SQL", "", "SELECT 1", "SELECT ?1, ?2", "SELECT NULL WHERE ?1=1", "SELECT abs(-9223372036854775808) WHERE ?1=1"};
+    for (size_t i = 0; i < sizeof sql / sizeof *sql; ++i) {
+        uint64_t a = UINT64_MAX, b = UINT64_MAX;
+        int ca = drbz_c_direct_sql_series(database.handle, sql[i], 1, 1, 1, 1, &a);
+        int cb = drbz_direct_sql_series(database.handle, sql[i], 1, 1, 1, 1, &b);
+        assert(ca != SQLITE_OK && ca == cb && a == UINT64_MAX && b == UINT64_MAX);
+        assert(sqlite3_next_stmt(database.handle, NULL) == NULL);
+    }
+}
 int main(int argc, char **argv) {
 #ifdef DRBZ_PROFILE
     install_meter(); meter_begin();
@@ -108,10 +140,16 @@ int main(int argc, char **argv) {
 #ifdef DRBZ_PROFILE
     bench_alloc_record("sqlite-xMalloc", "sqlite/connection", "shared_engine", "open", 1, 0, meter_end());
 #endif
+    verify_direct();
     printf("{\"event\":\"sqlite_environment\",\"version\":\"%s\",\"source_id\":\"%s\",\"threadsafe\":%d,\"lookaside_omitted\":%s,\"live_units\":\"underlying-xSize-bytes\"}\n",
         sqlite3_libversion(), sqlite3_sourceid(), sqlite3_threadsafe(), sqlite3_compileoption_used("OMIT_LOOKASIDE") ? "true" : "false");
-    const bench_case cases[] = {{"sqlite/prepare-reuse", {"c_each","zig_each","c_reuse","zig_reuse"}, 4, 1, 0, 0, reset, batch, NULL}};
-    bench_run(cases, 1, "sqlite-xMalloc", 0, argc, argv);
+    const bench_case cases[] = {
+        {"sqlite/prepare-reuse", {"c_each","zig_each","c_reuse","zig_reuse"}, 4, 1, 0, 0, reset, batch, NULL},
+        {"sqlite/direct-reuse", {"c_direct","zig_direct","zig_wrapped"}, 3, 1, 0, 1, reset, batch, NULL},
+        {"sqlite/direct-rebind", {"c_direct","zig_direct"}, 2, 1, 0, 2, reset, batch, NULL},
+        {"sqlite/direct-prepare-each", {"c_direct","zig_direct"}, 2, 1, 0, 3, reset, batch, NULL},
+    };
+    bench_run(cases, sizeof cases / sizeof *cases, "sqlite-xMalloc", 0, argc, argv);
 #ifdef DRBZ_PROFILE
     meter_begin();
 #endif

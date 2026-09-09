@@ -19,7 +19,10 @@
     "native/call-envelope": ["c_noop"]
   },
   "sqlite": {
-    "sqlite/prepare-reuse": ["c_each", "zig_each", "c_reuse", "zig_reuse"]
+    "sqlite/prepare-reuse": ["c_each", "zig_each", "c_reuse", "zig_reuse"],
+    "sqlite/direct-reuse": ["c_direct", "zig_direct", "zig_wrapped"],
+    "sqlite/direct-rebind": ["c_direct", "zig_direct"],
+    "sqlite/direct-prepare-each": ["c_direct", "zig_direct"]
   },
   "ruby": {
     "ruby/lf/128": ["ruby_byte_loop", "ffi_zig"],
