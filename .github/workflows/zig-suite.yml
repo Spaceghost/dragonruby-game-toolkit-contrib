@@ -1,0 +1,47 @@
+name: Zig native sample suite
+
+on:
+  pull_request:
+    paths:
+      - '**/*.c'
+      - '**/*.h'
+      - '**/*.m'
+      - '**/*.mm'
+      - '**/*.cpp'
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-suite.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-suite.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zig-suite-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inventory:
+    name: Audit native sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Enumerate every tracked C-family source and header
+        shell: python
+        run: |
+          import pathlib
+          import subprocess
+          suffixes = {'.c', '.h', '.m', '.mm', '.cc', '.cpp', '.cxx', '.hpp'}
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          for name in sorted(p for p in paths if pathlib.Path(p).suffix in suffixes):
+              path = pathlib.Path(name)
+              blob = subprocess.check_output(['git', 'hash-object', name], text=True).strip()
+              lines = len(path.read_bytes().splitlines())
+              print(f'NATIVE_SOURCE {blob} {lines:6d} {name}')
