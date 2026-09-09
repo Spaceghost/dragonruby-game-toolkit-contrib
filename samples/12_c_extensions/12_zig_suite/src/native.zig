@@ -79,7 +79,7 @@ export fn drbz_stars_soa(x: [*c]f32, y: [*c]f32, speed: [*c]const f32, len: usiz
         const nx = vx + vs;
         const ny = vy + vs;
         if (@reduce(.Or, (nx > max_x) | (ny > max_y))) {
-            for (0..8) |lane| {
+            inline for (0..8) |lane| {
                 x[i + lane] = if (nx[lane] > 1280) random(context) * -1280 else nx[lane];
                 y[i + lane] = if (ny[lane] > 720) random(context) * -720 else ny[lane];
             }
