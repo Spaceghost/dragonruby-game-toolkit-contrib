@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    library.bundle_compiler_rt = true;
     const regex = b.addExecutable(.{
         .name = "drbz-regex-long",
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
@@ -35,17 +36,20 @@ pub fn build(b: *std.Build) void {
 
     // GNU-style wrapping observes references in linked objects, not arbitrary
     // allocations inside shared libraries or direct mmap/syscall allocation.
-    // This executable is a Linux native-only probe, not a timing benchmark.
+    // Zig 0.16's cc driver rejects --wrap: use the native system C driver only
+    // for this probe. The actual candidate library is still built by Zig above.
+    // This is a Linux native-only probe, not a timing benchmark or cross build.
     if (target.result.os.tag == .linux) {
         const link = b.addSystemCommand(&.{
-            b.graph.zig_exe, "cc", "-std=c11", "-D_POSIX_C_SOURCE=200809L",
-            "-Wall", "-Wextra", "-Werror", "-UNDEBUG", "-fno-builtin", "-O2",
+            "cc", "-std=c11", "-D_POSIX_C_SOURCE=200809L",
+            "-Wall", "-Wextra", "-Werror", "-UNDEBUG", "-fno-builtin", "-O2", "-no-pie",
             "-Wl,--wrap=malloc", "-Wl,--wrap=calloc", "-Wl,--wrap=realloc",
             "-Wl,--wrap=aligned_alloc", "-Wl,--wrap=posix_memalign", "-Wl,--wrap=free",
         });
         link.addArgs(&.{ "-I", b.pathFromRoot("../src") });
         link.addFileArg(b.path("allocations.c"));
         link.addArtifactArg(library);
+        link.addArg("-lm");
         link.addArg("-o");
         const binary = link.addOutputFileArg("drbz-allocations");
         const install = b.addInstallFile(binary, "bin/drbz-allocations");
