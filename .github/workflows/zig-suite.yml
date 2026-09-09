@@ -19,7 +19,6 @@ on:
 
 permissions:
   contents: read
-
 concurrency:
   group: zig-suite-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -33,15 +32,60 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Enumerate every tracked C-family source and header
-        shell: python
+      - run: python samples/12_c_extensions/12_zig_suite/tools/inventory.py
+
+  portable:
+    name: Portable kernels (${{ matrix.runner }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cpu: baseline
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04
+            cpu: native
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04-arm
+            cpu: native
+            archive: aarch64-linux
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+    defaults:
+      run:
+        working-directory: samples/12_c_extensions/12_zig_suite
+        shell: bash
+    env:
+      ZIG_CPU: ${{ matrix.cpu }}
+      ZIG_OPTIMIZE: ReleaseFast
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned Zig
+        env:
+          ZIG_ARCHIVE: ${{ matrix.archive }}
+          ZIG_SHA256: ${{ matrix.sha256 }}
         run: |
-          import pathlib
-          import subprocess
-          suffixes = {'.c', '.h', '.m', '.mm', '.cc', '.cpp', '.cxx', '.hpp'}
-          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          for name in sorted(p for p in paths if pathlib.Path(p).suffix in suffixes):
-              path = pathlib.Path(name)
-              blob = subprocess.check_output(['git', 'hash-object', name], text=True).strip()
-              lines = len(path.read_bytes().splitlines())
-              print(f'NATIVE_SOURCE {blob} {lines:6d} {name}')
+          set -euo pipefail
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-$ZIG_ARCHIVE-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-$ZIG_ARCHIVE-0.16.0" >> "$GITHUB_PATH"
+      - name: Verify original source pins
+        run: |
+          test "$(git hash-object ../01_basics/app/ext.c)" = a0879197d57a50d50ea8a7838e2771f826dc0210
+          test "$(git hash-object ../02_intermediate/app/re.c)" = 2d64d9f3e941af2a670a4176615f71173a33fb92
+          test "$(git hash-object ../02_intermediate/app/re.h)" = fb2d0028f039138701e2d9bce2a39a4c2d54e426
+      - name: Debug parity and bounds
+        run: zig build test -Doptimize=Debug -Dcpu="$ZIG_CPU" --summary all
+      - name: ReleaseSafe parity and bounds
+        run: zig build test -Doptimize=ReleaseSafe -Dcpu="$ZIG_CPU" --summary all
+      - name: ReleaseFast parity and interleaved measurements
+        run: |
+          set -euo pipefail
+          zig build bench -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/zig-bench.log"
+          python tools/report.py "$RUNNER_TEMP/zig-bench.log"
