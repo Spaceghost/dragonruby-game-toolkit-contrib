@@ -133,6 +133,25 @@ pub fn build(b: *std.Build) void {
         test_extension.root_module.addIncludePath(b.path("tests/support"));
         test_extension.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
         test_extension.root_module.addCSourceFile(.{ .file = b.path("app/bridge.c"), .flags = flags });
+
+        // Compile the actual, unchanged sibling sample, not a copied reference.
+        const original = b.addLibrary(.{
+            .name = "original_c_scanner",
+            .linkage = .dynamic,
+            .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+        });
+        original.root_module.addIncludePath(b.path("tests/support"));
+        original.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
+        const original_flags = b.allocator.alloc([]const u8, flags.len + 2) catch @panic("out of memory");
+        @memcpy(original_flags[0..flags.len], flags);
+        original_flags[flags.len] = "-DDRB_FFI=";
+        // The original example has unused callback arguments. Keep our warnings strict.
+        original_flags[flags.len + 1] = "-Wno-unused-parameter";
+        original.root_module.addCSourceFile(.{
+            .file = .{ .cwd_relative = b.pathFromRoot("../03_native_pixel_arrays/app/ext.c") },
+            .flags = original_flags,
+        });
+
         const host = b.addExecutable(.{
             .name = "mruby-bridge-test",
             .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
@@ -145,11 +164,26 @@ pub fn build(b: *std.Build) void {
         host.root_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ mruby, "build/host/lib/libmruby.a" }) });
         host.root_module.linkSystemLibrary("m", .{});
         host.root_module.linkSystemLibrary("dl", .{});
+        const integration = b.step("mruby-test", "Compare original C with Zig through Ruby, including a negative control (not the SDK)");
         const run_host = b.addRunArtifact(host);
+        run_host.has_side_effects = true;
         run_host.addArtifactArg(test_extension);
+        run_host.addArtifactArg(original);
         run_host.addFileArg(b.path("tests/smoke.rb"));
         if (published) run_host.addFileArg(b.path("tests/dragonruby_mruby.rb"));
-        b.step("mruby-test", "Execute Ruby through the dynamic C/Zig adapter (not the SDK)").dependOn(&run_host.step);
+        integration.dependOn(&run_host.step);
+
+        // A green test requires detecting the injected wrong pixel as well.
+        const run_negative = b.addRunArtifact(host);
+        run_negative.has_side_effects = true;
+        run_negative.addArtifactArg(test_extension);
+        run_negative.addArtifactArg(original);
+        run_negative.addFileArg(b.path("tests/smoke.rb"));
+        if (published) run_negative.addFileArg(b.path("tests/dragonruby_mruby.rb"));
+        run_negative.addArg("--inject-mismatch");
+        run_negative.expectExitCode(42);
+        run_negative.expectStdErrEqual("PIXEL_MISMATCH frame=17 pixel=7 C=ff000000 Zig=ff000001\n");
+        integration.dependOn(&run_negative.step);
     }
 
     // Only this artifact uses the matching proprietary SDK, never test headers.

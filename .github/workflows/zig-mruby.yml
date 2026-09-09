@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - samples/12_c_extensions/03_native_pixel_arrays/app/ext.c
       - docs/dragonruby-mruby.patch
       - docs/dragonruby-mruby.patch.readme.txt
       - .github/workflows/zig-mruby.yml
   pull_request:
     paths:
       - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - samples/12_c_extensions/03_native_pixel_arrays/app/ext.c
       - docs/dragonruby-mruby.patch
       - docs/dragonruby-mruby.patch.readme.txt
       - .github/workflows/zig-mruby.yml
@@ -59,10 +61,12 @@ jobs:
           set -euo pipefail
           test "$(git -C .ci-mruby rev-parse HEAD)" = "$MRUBY_REVISION"
           test -z "$(git -C .ci-mruby status --porcelain --untracked-files=all)"
+          reference=samples/12_c_extensions/03_native_pixel_arrays/app/ext.c
+          test "$(git hash-object "$reference")" = e8f5458c41034dfdf38f75163a277ef015fae125
+          echo "Original C sample verified: $(git hash-object "$reference")"
           if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then
             patch="$GITHUB_WORKSPACE/docs/dragonruby-mruby.patch"
-            # Pin the Git blob as well as the upstream commit. Never rebase,
-            # partially apply, rewrite or silently skip the published patch.
+            # Apply the complete published source patch without rewriting it.
             expected=bd85545b27f4c6397da251ca05ead018cecb9818
             actual=$(git hash-object "$patch")
             if [ "$actual" != "$expected" ]; then
@@ -96,7 +100,7 @@ jobs:
             tail -n 60 "$RUNNER_TEMP/mruby-build.log"
             exit "$result"
           fi
-      - name: Load and exercise the actual bridge and Zig library
+      - name: Compare original C and Zig through Ruby; reject an injected wrong pixel
         id: integration
         working-directory: samples/12_c_extensions/11_zig_native_pixel_arrays
         shell: bash
@@ -106,14 +110,24 @@ jobs:
           if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
           ruby -c tests/dragonruby_mruby.rb
           for mode in Debug ReleaseSafe; do
+            log="$RUNNER_TEMP/mruby-$mode.log"
             if zig build mruby-test -Doptimize="$mode" -Dcpu=baseline \
               -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dmruby-boxing="$MRUBY_BOXING" \
-              -Dmruby-dragonruby="$published" --summary all \
-              > "$RUNNER_TEMP/mruby-$mode.log" 2>&1; then
-              tail -n 20 "$RUNNER_TEMP/mruby-$mode.log"
+              -Dmruby-dragonruby="$published" --summary all > "$log" 2>&1; then
+              cat "$log"
+              # A build with missing/skipped positive execution cannot provide evidence.
+              test "$(grep -c '^PROOF ' "$log")" = 1
+              {
+                echo "### $mode: original C / Zig parity and negative control passed"
+                echo 'Both libraries were called by Ruby. Capture preview only, not the engine renderer.'
+                echo '```text'
+                sed -n '/^Original C versus Zig:/,/^PROOF /p' "$log"
+                echo '```'
+                echo 'Injected frame 17 / pixel 7 mismatch: exact diagnostic and exit code 42 required.'
+              } >> "$GITHUB_STEP_SUMMARY"
             else
               result=$?
-              tail -n 70 "$RUNNER_TEMP/mruby-$mode.log"
+              tail -n 90 "$log"
               exit "$result"
             fi
           done
@@ -127,10 +141,11 @@ jobs:
         run: |
           {
             echo "## $MRUBY_FLAVOR / $MRUBY_BOXING"
-            echo "- Base commit: $MRUBY_REVISION"
+            echo "- Tested repository commit: $GITHUB_SHA"
+            echo "- Interpreter base commit: $MRUBY_REVISION"
             echo "- Source verification/application: $SOURCE_RESULT"
             echo "- VM build: $VM_RESULT"
-            echo "- Debug and ReleaseSafe bridge execution: $INTEGRATION_RESULT"
-            echo '- The published-patch target checks patched state fields and division semantics inside the loaded test host.'
+            echo "- Debug and ReleaseSafe comparison/negative-control execution: $INTEGRATION_RESULT"
+            echo '- The published-patch target checks patched state fields and division semantics in the running VM.'
             echo '- The host table/upload sink is a test contract, NOT the DragonRuby SDK ABI or renderer.'
           } >> "$GITHUB_STEP_SUMMARY"
