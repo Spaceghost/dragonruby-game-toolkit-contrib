@@ -137,6 +137,8 @@
     "sqlite/test.c": "Real SQLite error tests and lifecycle benchmark",
     "bridge/bridge.c": "SDK-specific Ruby adapter; no native algorithms",
     "bridge/host.c": "Real-mruby test executable; not a game engine",
-    "bridge/support/dragonruby.h": "Explicitly isolated test-only API contract, not the proprietary ABI"
+    "bridge/support/dragonruby.h": "Explicitly isolated test-only API contract, not the proprietary ABI",
+    "evidence/regex_long.c": "Long-input and protected-page C differential oracle; binary extension compares Zig variants only",
+    "evidence/allocations.c": "Calibrated Linux allocator-reference interception and observable native-kernel assertions"
   }
 }
