@@ -1,0 +1,142 @@
+{
+  "base_commit": "de2b581f4d2d62759785bd359c72a8e724648638",
+  "scope": "Every tracked native source/header is accounted for. Retained platform adapters, binding code and independent C test oracles are not claimed as Zig ports.",
+  "groups": [
+    {
+      "root": "samples/12_c_extensions/01_basics/",
+      "role": "Original square and binding retained; checked scalar/batch arithmetic ported",
+      "zig": ["src/native.zig"],
+      "files": {
+        "app/ext.c": "a0879197d57a50d50ea8a7838e2771f826dc0210",
+        "native/ext-bindings.c": "66fdce961b247f94dbb73a4bcc57a7cd579d64b1"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/02_intermediate/",
+      "role": "Original tiny-regex implementation and bindings retained; dialect ported and differentially tested",
+      "zig": ["src/regex.zig"],
+      "files": {
+        "app/re.c": "2d64d9f3e941af2a670a4176615f71173a33fb92",
+        "app/re.h": "fb2d0028f039138701e2d9bce2a39a4c2d54e426",
+        "native/ext-bindings.c": "5e04bbfc6237fe78e792916ca17eebab2aeaabbc",
+        "native/re-bindings.c": "d877a05f07e98bb42dac99c96339cd6181ed582f"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/03_native_pixel_arrays/",
+      "role": "Original scanner and binding retained; existing faithful Zig and new dirty-row candidate",
+      "zig": ["src/native.zig"],
+      "files": {
+        "app/ext.c": "e8f5458c41034dfdf38f75163a277ef015fae125",
+        "native/ext-bindings.c": "bdba6e78621482cc5420a9ece463ad3a5a911c2b"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/04_handcrafted_extension/",
+      "role": "Nested Adder traversal ported with bounded depth, cycle rejection and ordered arithmetic",
+      "zig": ["src/apps.zig"],
+      "files": { "app/extension.c": "88608d37945ecbbe5e5789c6f48a9764dee51e32" }
+    },
+    {
+      "root": "samples/12_c_extensions/04_handcrafted_extension_advanced/",
+      "role": "Star motion ported and measured; original per-star Ruby object/render adapter retained, batched Ruby rendering integration pending",
+      "zig": ["src/native.zig"],
+      "files": { "native/ext-bindings.c": "5ec7bdd410407632343ac8024ee7f23cba4d2222" }
+    },
+    {
+      "root": "samples/12_c_extensions/05_ios_c_extensions/",
+      "role": "Retained Objective-C Foundation/main-thread dispatch boundary; no portable compute kernel or platform validation claimed",
+      "zig": [],
+      "files": {
+        "ext.h": "ff1fc104f9b434a3329b824e82d5323a94c87e72",
+        "ext.m": "2bb49672da7b0807dcf850b8433b2b43ffea1da0"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/06_handcrafted_mac_extension/",
+      "role": "Greeting formatting ported; original Foundation classes and SDK registration retained, real macOS engine validation pending",
+      "zig": ["src/apps.zig"],
+      "files": {
+        "app-native/bye.h": "f01fe038f1b786b03b59e733c654fad7934f41f9",
+        "app-native/bye.m": "a92e037890364bf6e8955562f5ce9233a01b435c",
+        "app-native/ext.c": "3dd91affa3811bfb1f5174271eebcf8159ea9f45",
+        "app-native/ext.h": "08666242bee0697d64a4ed715dc9b7cf942eec84",
+        "app-native/hello.h": "fd1a9fbcad8595b6810288ed04bd0e7737864f74",
+        "app-native/hello.m": "4321cce7faf30591e7011072ffd3f34e3b810c79"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/07_handcrafted_steam_extensions/",
+      "role": "Retained Steamworks C++ ABI and Ruby registration; initialization/error handling and SDK execution are not migrated in this suite",
+      "zig": [],
+      "files": {
+        "app-native/ext.c": "0737dab9e84b630f26b81580c3bb49b427c4a21b",
+        "app-native/ext.h": "08666242bee0697d64a4ed715dc9b7cf942eec84",
+        "app-native/steam_api_wrapper.cpp": "7e87b20560bccccb91126fd39ea275507fa3ecf7",
+        "app-native/steam_api_wrapper.h": "aecf4c0286feef77cf53f6a67f0250c4ef357076"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/08_handcrafted_android_extension/",
+      "role": "Retained JNI platform boundary; JNI lifetime/exception cleanup and Android execution remain pending",
+      "zig": [],
+      "files": { "app-native/ext.c": "5a8953afca5f619376019736f138d1e8bfa03172" }
+    },
+    {
+      "root": "samples/12_c_extensions/09_handcrafted_threads/",
+      "role": "Worker ownership and atomic lifecycle ported; real pthread tests, original SDL/Ruby registration retained",
+      "zig": ["src/apps.zig"],
+      "files": { "app-native/ext.c": "c5dc357f8885abd5133bf0b2b4eb5ff2542acab7" }
+    },
+    {
+      "root": "samples/12_c_extensions/10_sqlite3/",
+      "role": "Connection/statement ownership ported and measured against real SQLite; original Ruby query_json adapter retained",
+      "zig": ["sqlite/sqlite.zig"],
+      "files": {
+        "app-native/ext.c": "4c949cf5e403920e4fc7e2e081b5b500adedf4dc",
+        "app-native/ext.h": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      }
+    },
+    {
+      "root": "samples/12_c_extensions/11_zig_native_pixel_arrays/",
+      "role": "Retained SDK adapter, C ABI oracles and test-only host support; preserves the independent proof from PR #1",
+      "zig": [],
+      "files": {
+        "app/bridge.c": "95db149ae1cef1bb5edfde808cc483b0666af24f",
+        "app/native.h": "6aa94c2f5f83e668e0d494b7a57b3c1722b7ae7f",
+        "tests/abi.c": "ed4008c6c1df53fe03f71ab9e818e44b34b7f482",
+        "tests/mruby_host.c": "d5b083524d894177bd5bbc5d69702cca41a2e967",
+        "tests/support/dragonruby.h": "6a6d1fadec38d5a87d9b1276fb130fc0e32a3bed",
+        "tests/support/dynlib.h": "4b7db8562025a0f240df9da32a5aca7df8a3b7a3",
+        "tests/support/guard.h": "a9e2f22b70fc0cbe7ca78b69428bef9dedfc4ec3"
+      }
+    },
+    {
+      "root": "samples/13_rust_extensions/",
+      "role": "Retained Rust FFI bindings, rure public header and C tests/examples; tiny-regex is not a replacement for the Rust regex API",
+      "zig": [],
+      "files": {
+        "01_basics/app/ext.h": "a34e8421ffb439f3a1d8c52b4082d14852f17ed1",
+        "01_basics/native/ext-bindings.c": "6f053d4c6ca307f539e562ad456c6883c0e7d5f8",
+        "02_intermediate/native/ext-bindings.c": "1de9ab1078416c9363e71951e5520ca8c305d513",
+        "02_intermediate/regex-capi/ctest/test.c": "ba3301c33fca4ad6b9713044aae7f9ec731fd6ed",
+        "02_intermediate/regex-capi/examples/iter.c": "47c83e806f8bcc99a57b719123a831a29ae4df40",
+        "02_intermediate/regex-capi/include/.#rure.h": "666a32720dfc187648331a0e179337c94ac6d760d",
+        "02_intermediate/regex-capi/include/rure.h": "9d024c93d8e61f0f4060d7631dead6b3e390d5da"
+      }
+    }
+  ],
+  "suite_native_files": {
+    "src/native.h": "Public native-kernel C ABI",
+    "src/apps.h": "Public traversal, formatting and worker C ABI",
+    "tests/controls.c": "Independent scalar C controls, not original repository implementations",
+    "tests/parity.c": "Differential and protected-memory test oracle",
+    "tests/bench.c": "Native timing harness with observable checksums",
+    "tests/apps.c": "C ABI and real pthread lifecycle tests",
+    "sqlite/sqlite.h": "SQLite wrapper C ABI",
+    "sqlite/test.c": "Real SQLite error tests and lifecycle benchmark",
+    "bridge/bridge.c": "SDK-specific Ruby adapter; no native algorithms",
+    "bridge/host.c": "Real-mruby test executable; not a game engine",
+    "bridge/support/dragonruby.h": "Explicitly isolated test-only API contract, not the proprietary ABI"
+  }
+}

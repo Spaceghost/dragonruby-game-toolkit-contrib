@@ -1,15 +1,37 @@
-"""Inventory Git objects rather than following working-tree symlinks."""
+"""Require an explicit disposition for every tracked native source/header.
+
+Read Git blobs, not working-tree symlink targets. Original-source changes and
+new unclassified native files require a reviewed COVERAGE.json update.
+"""
 from __future__ import annotations
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import subprocess
 
 EXTENSIONS = {'.c', '.h', '.m', '.mm', '.cc', '.cpp', '.cxx', '.hpp'}
+SUITE = 'samples/12_c_extensions/12_zig_suite/'
 
 
 def main() -> None:
-    raw = subprocess.check_output(['git', 'ls-files', '--stage', '-z'])
-    rows = []
+    root = Path(subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip())
+    coverage = json.loads((root / SUITE / 'COVERAGE.json').read_text())
+    expected = {}
+    for group in coverage['groups']:
+        for implementation in group['zig']:
+            if not (root / SUITE / implementation).is_file():
+                raise SystemExit(f'Missing declared Zig implementation: {implementation}')
+        for relative, sha in group['files'].items():
+            name = group['root'] + relative
+            if name in expected:
+                raise SystemExit(f'Duplicate coverage entry: {name}')
+            expected[name] = (sha, group['role'])
+    for relative, role in coverage['suite_native_files'].items():
+        name = SUITE + relative
+        if name in expected:
+            raise SystemExit(f'Duplicate coverage entry: {name}')
+        expected[name] = (None, role)
+    raw = subprocess.check_output(['git', 'ls-files', '--stage', '-z'], cwd=root)
+    rows, seen = [], set()
     for entry in raw.split(b'\0'):
         if not entry:
             continue
@@ -20,12 +42,20 @@ def main() -> None:
             continue
         if stage != '0':
             raise SystemExit(f'Unmerged native source: {path}')
-        data = subprocess.check_output(['git', 'cat-file', 'blob', sha])
+        if path not in expected:
+            raise SystemExit(f'Unclassified native source: {path}; update COVERAGE.json')
+        pin, role = expected[path]
+        if pin is not None and sha != pin:
+            raise SystemExit(f'Original source changed: {path}: {sha} != {pin}')
+        seen.add(path)
+        data = subprocess.check_output(['git', 'cat-file', 'blob', sha], cwd=root)
         kind = 'symlink' if mode == '120000' else 'source'
-        row = {'path': path, 'blob': sha, 'kind': kind, 'lines': len(data.splitlines())}
+        row = {'path': path, 'blob': sha, 'kind': kind, 'lines': len(data.splitlines()), 'role': role}
         rows.append(row)
         print('NATIVE_SOURCE ' + json.dumps(row, sort_keys=True))
-    print('NATIVE_TOTAL ' + json.dumps({'entries': len(rows), 'c_sources': sum(row['path'].endswith('.c') and row['kind'] == 'source' for row in rows), 'symlinks': sum(row['kind'] == 'symlink' for row in rows)}))
+    if missing := set(expected) - seen:
+        raise SystemExit('Stale coverage entries: ' + ', '.join(sorted(missing)))
+    print('NATIVE_TOTAL ' + json.dumps({'entries': len(rows), 'c_sources': sum(row['path'].endswith('.c') and row['kind'] == 'source' for row in rows), 'symlinks': sum(row['kind'] == 'symlink' for row in rows), 'unclassified': 0}))
 
 
 if __name__ == '__main__':

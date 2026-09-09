@@ -7,9 +7,13 @@
 #define __has_c_attribute(attribute) 0
 #endif
 #include <mruby.h>
+#include <mruby/string.h>
 #include <stdint.h>
 #define DRB_FFI_EXPORT __attribute__((visibility("default")))
 typedef mrb_int drbz_get_args_fn(mrb_state *, const char *, ...);
+/* mruby 3.0 uses size_t here; 3.4 uses mrb_int. Derive the real signature
+ * from this VM's header rather than casting incompatible function pointers. */
+typedef __typeof__(mrb_str_new) drbz_str_new_fn;
 /* This is a host contract, NOT the proprietary DragonRuby SDK ABI. */
 typedef struct drb_api_t {
     struct RClass *(*mrb_module_get)(mrb_state *, const char *);
@@ -20,6 +24,6 @@ typedef struct drb_api_t {
     void (*mrb_raise)(mrb_state *, struct RClass *, const char *);
     struct RClass *(*mrb_class_get)(mrb_state *, const char *);
     mrb_value (*drb_float_value)(mrb_state *, double);
-    mrb_value (*mrb_str_new)(mrb_state *, const char *, mrb_int);
+    drbz_str_new_fn *mrb_str_new;
 } drb_api_t;
 #endif
