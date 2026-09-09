@@ -68,7 +68,8 @@ pub fn build(b: *std.Build) void {
         }
     } else {
         const legacy = library(b, "measure_legacy", "../../11_zig_native_pixel_arrays/app/native.zig", target, optimize);
-        const sql = library(b, "measure_sqlite", "../sqlite/sqlite.zig", target, optimize);
+        // Legacy C consumers opt in; importing sqlite.zig no longer emits this ABI.
+        const sql = library(b, "measure_sqlite", "../sqlite/compat.zig", target, optimize);
         sql.root_module.linkSystemLibrary("sqlite3", .{});
         const direct = library(b, "measure_direct_sqlite", "../sqlite/series.zig", target, optimize);
         direct.root_module.linkSystemLibrary("sqlite3", .{});

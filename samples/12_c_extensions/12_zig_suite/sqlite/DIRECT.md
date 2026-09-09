@@ -1,19 +1,23 @@
 # Direct SQLite operations from Zig
 
-Import `direct.zig` and call `sql.c.sqlite3_*` for the actual SQLite C API.
-`@cImport` uses the installed sqlite3.h instead of maintaining duplicate FFI
-signatures or routing each operation through an exported `drbz_sql_*` function.
-Link the same SQLite library that supplied those headers.
+Import `sqlite.zig` (or the implementation module `direct.zig`) and call
+`sql.c.sqlite3_*` for the actual SQLite C API. `@cImport` uses the installed
+sqlite3.h instead of maintaining duplicate FFI signatures or routing each
+operation through an exported `drbz_sql_*` function. Link the same SQLite
+library that supplied those headers.
 
 The former per-operation state machine is retained byte-for-byte in
 `compat.zig` for existing C callers and honest before/after controls. It is
-not called by `direct.zig` or `series.zig`. `sqlite.zig` still exports that C ABI
-and also exposes the new Zig-native API.
+not imported or emitted by the default `sqlite.zig` entry point. C-ABI test
+and measurement builds explicitly select `compat.zig`; ordinary Zig code
+gets direct declarations and the native batch API only. The measured series
+imports the public entry point, so its compiled-symbol audit also guards
+against accidentally pulling compatibility exports back into that path.
 
 ## Reusable batches, without a callback table
 
 ```zig
-const sql = @import("direct.zig");
+const sql = @import("sqlite.zig");
 const c = sql.c;
 
 const IgnoreRows = struct {
@@ -89,8 +93,10 @@ All raw data and losses are retained. No fixed speed ratio gates CI.
 `tools/check_direct_calls.py` inspects the compiled direct-batch archive, requires
 actual sqlite3_* imports, and rejects drbz_sql_*, mruby and allocation-probe wrapper
 symbols. Four deliberate bad symbol-list controls verify that the audit rejects
-its intended failures. The installed audit includes the archive's SHA-256. This
-is structural evidence, not a promise of universal performance parity.
+its intended failures. CI includes the audit JSON, archive SHA-256, full symbol
+lists and actual archive disassembly in each measurement artifact, alongside
+raw timings and allocation records. The audit JSON is also printed in the job
+log. This is structural evidence, not a promise of universal performance parity.
 
 ## Recorded result, not a portable speed guarantee
 

@@ -1,6 +1,7 @@
-//! Benchmark-only C entry point. The production API is direct.zig; only this
+//! Benchmark-only C entry point. The production API is sqlite.zig; only this
 //! outer batch crosses the C ABI. All SQLite operations inside are direct.
-const direct = @import("direct.zig");
+//! Import the public entry point so the symbol audit also guards that path.
+const direct = @import("sqlite.zig");
 const c = direct.c;
 const Sequence = struct {
     remaining: usize,

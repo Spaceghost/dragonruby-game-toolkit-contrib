@@ -2,7 +2,8 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const library = b.addLibrary(.{ .name = "drbz_sqlite", .linkage = .static, .root_module = b.createModule(.{ .root_source_file = b.path("sqlite.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
+    // Compatibility is explicitly linked by C tests, never by the Zig-first API.
+    const library = b.addLibrary(.{ .name = "drbz_sqlite", .linkage = .static, .root_module = b.createModule(.{ .root_source_file = b.path("compat.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
     library.root_module.linkSystemLibrary("sqlite3", .{});
     const test_exe = b.addExecutable(.{ .name = "drbz-sqlite-test", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
     test_exe.root_module.addIncludePath(b.path("."));

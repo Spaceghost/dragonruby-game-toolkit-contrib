@@ -1,13 +1,9 @@
-//! Prefer c.sqlite3_* or runIntBatch from Zig. The exported drbz_sql_* state
-//! machine is retained solely for C ABI compatibility and regression controls;
-//! it is not an intermediate layer for the Zig-native path.
+//! Zig-first SQLite entry point. c.sqlite3_* are actual SQLite declarations;
+//! runIntBatch specializes its source and sink without per-operation ABI calls.
+//! The legacy exported state machine is opt-in: build/import compat.zig only
+//! for existing C consumers or explicitly labeled benchmark controls.
 pub const direct = @import("direct.zig");
 pub const c = direct.c;
 pub const runIntBatch = direct.runIntBatch;
 pub const IntSlice = direct.IntSlice;
 pub const BatchResult = direct.BatchResult;
-const compatibility = @import("compat.zig");
-pub const Database = compatibility.Database;
-pub const Statement = compatibility.Statement;
-pub const Text = compatibility.Text;
-comptime { _ = compatibility; }

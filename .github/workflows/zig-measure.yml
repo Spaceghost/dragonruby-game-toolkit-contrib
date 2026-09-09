@@ -72,7 +72,14 @@ jobs:
           set -euo pipefail
           cd measure
           zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/measurement-proof/build.log"
-          cp zig-out/direct-call-audit.json "$RUNNER_TEMP/measurement-proof/direct-call-audit.json"
+      - name: Retain the direct-call audit and actual machine code
+        run: |
+          set -euo pipefail
+          archive=measure/zig-out/lib/libmeasure_direct_sqlite.a
+          cp measure/zig-out/direct-call-audit.json "$RUNNER_TEMP/measurement-proof/direct-call-audit.json"
+          nm "$archive" > "$RUNNER_TEMP/measurement-proof/direct-call-symbols.txt"
+          nm -u "$archive" > "$RUNNER_TEMP/measurement-proof/direct-call-undefined.txt"
+          objdump -dr "$archive" > "$RUNNER_TEMP/measurement-proof/direct-call-disassembly.txt"
           cat "$RUNNER_TEMP/measurement-proof/direct-call-audit.json"
       - name: Profile allocations and measure fresh processes
         run: |
