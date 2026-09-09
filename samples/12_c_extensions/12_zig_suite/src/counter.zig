@@ -1,9 +1,9 @@
 const std = @import("std");
 
-// Thirty-two counters share one reduction. Chunks contain at most 255 loads,
-// so every lane lies in 0..255. Modular addition is exact under that bound;
-// it also avoids a checked-vector-add failure observed in ARM ReleaseSafe.
-// Slice/index checks and the rest of ReleaseSafe remain enabled.
+// Thirty-two counters share one reduction. At most 255 loads contribute to
+// a chunk, so each lane is in 0..255. Modular addition is exact under this
+// bound. Keep chunk arithmetic explicitly usize: inferred @min results can
+// be narrower than the original buffer length.
 pub fn count(bytes: []const u8) usize {
     const V = @Vector(32, u8);
     const newline: V = @splat('\n');
@@ -12,7 +12,7 @@ pub fn count(bytes: []const u8) usize {
     var remaining = bytes;
     var total: usize = 0;
     while (remaining.len >= 32) {
-        const blocks = @min(remaining.len / 32, 255);
+        const blocks: usize = @min(remaining.len / 32, 255);
         const chunk = remaining[0 .. blocks * 32];
         var counts: V = @splat(0);
         var offset: usize = 0;

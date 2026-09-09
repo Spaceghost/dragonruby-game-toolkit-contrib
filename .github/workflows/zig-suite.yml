@@ -7,7 +7,10 @@ on:
       - '**/*.h'
       - '**/*.m'
       - '**/*.mm'
+      - '**/*.cc'
       - '**/*.cpp'
+      - '**/*.cxx'
+      - '**/*.hpp'
       - 'samples/12_c_extensions/12_zig_suite/**'
       - '.github/workflows/zig-suite.yml'
   push:
@@ -89,3 +92,16 @@ jobs:
           set -euo pipefail
           zig build bench -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/zig-bench.log"
           python tools/report.py "$RUNNER_TEMP/zig-bench.log"
+      - name: Real SQLite lifecycle and statement-reuse measurements
+        run: |
+          set -euo pipefail
+          if ! pkg-config --exists sqlite3; then
+            sudo apt-get update
+            sudo apt-get install -y libsqlite3-dev
+          fi
+          cd sqlite
+          for mode in Debug ReleaseSafe ReleaseFast; do
+            zig build test -Doptimize="$mode" -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/sqlite-$mode.log"
+          done
+          cd ..
+          python tools/report.py "$RUNNER_TEMP/sqlite-ReleaseFast.log"
