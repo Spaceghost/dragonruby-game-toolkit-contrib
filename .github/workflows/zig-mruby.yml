@@ -1,0 +1,151 @@
+name: Zig mruby integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - samples/12_c_extensions/03_native_pixel_arrays/app/ext.c
+      - docs/dragonruby-mruby.patch
+      - docs/dragonruby-mruby.patch.readme.txt
+      - .github/workflows/zig-mruby.yml
+  pull_request:
+    paths:
+      - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - samples/12_c_extensions/03_native_pixel_arrays/app/ext.c
+      - docs/dragonruby-mruby.patch
+      - docs/dragonruby-mruby.patch.readme.txt
+      - .github/workflows/zig-mruby.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: zig-mruby-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bridge:
+    name: Real mruby (${{ matrix.flavor }}, ${{ matrix.boxing }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [upstream-3.4, dragonruby-3.0]
+        boxing: [word, nan, none]
+        include:
+          - flavor: upstream-3.4
+            revision: a309524d0bc90eef077a24634db2495a6f68e318 # mruby 3.4.0
+          - flavor: dragonruby-3.0
+            revision: 0f45836b5954accf508f333f932741b925214471 # mruby 3.0.0
+    env:
+      MRUBY_BOXING: ${{ matrix.boxing }}
+      MRUBY_FLAVOR: ${{ matrix.flavor }}
+      MRUBY_REVISION: ${{ matrix.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mruby/mruby
+          ref: ${{ matrix.revision }}
+          path: .ci-mruby
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify source and apply the pinned published patch
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci-mruby rev-parse HEAD)" = "$MRUBY_REVISION"
+          test -z "$(git -C .ci-mruby status --porcelain --untracked-files=all)"
+          reference=samples/12_c_extensions/03_native_pixel_arrays/app/ext.c
+          test "$(git hash-object "$reference")" = e8f5458c41034dfdf38f75163a277ef015fae125
+          echo "Original C sample verified: $(git hash-object "$reference")"
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then
+            patch="$GITHUB_WORKSPACE/docs/dragonruby-mruby.patch"
+            # Apply the complete published source patch without rewriting it.
+            expected=bd85545b27f4c6397da251ca05ead018cecb9818
+            actual=$(git hash-object "$patch")
+            if [ "$actual" != "$expected" ]; then
+              echo "Published patch changed: expected $expected, got $actual" >&2
+              exit 1
+            fi
+            git -C .ci-mruby apply --check --index "$patch"
+            git -C .ci-mruby apply --index "$patch"
+            git -C .ci-mruby diff --exit-code
+            git -C .ci-mruby diff --cached --stat
+            echo "Applied published patch blob $actual to $MRUBY_REVISION"
+          fi
+      - name: Install checksum-pinned Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+      - name: Build the real mruby host
+        id: vm
+        shell: bash
+        run: |
+          export MRUBY_CONFIG="$GITHUB_WORKSPACE/samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb"
+          cd .ci-mruby
+          if rake -j2 > "$RUNNER_TEMP/mruby-build.log" 2>&1; then
+            echo "mruby build passed: $MRUBY_FLAVOR / $MRUBY_BOXING"
+          else
+            result=$?
+            tail -n 60 "$RUNNER_TEMP/mruby-build.log"
+            exit "$result"
+          fi
+      - name: Compare original C and Zig through Ruby; reject an injected wrong pixel
+        id: integration
+        working-directory: samples/12_c_extensions/11_zig_native_pixel_arrays
+        shell: bash
+        run: |
+          set -euo pipefail
+          published=false
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
+          ruby -c tests/dragonruby_mruby.rb
+          for mode in Debug ReleaseSafe; do
+            log="$RUNNER_TEMP/mruby-$mode.log"
+            if zig build mruby-test -Doptimize="$mode" -Dcpu=baseline \
+              -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dmruby-boxing="$MRUBY_BOXING" \
+              -Dmruby-dragonruby="$published" --summary all > "$log" 2>&1; then
+              cat "$log"
+              # A build with missing/skipped positive execution cannot provide evidence.
+              test "$(grep -c '^PROOF ' "$log")" = 1
+              {
+                echo "### $mode: original C / Zig parity and negative control passed"
+                echo 'Both libraries were called by Ruby. Capture preview only, not the engine renderer.'
+                echo '```text'
+                sed -n '/^Original C versus Zig:/,/^PROOF /p' "$log"
+                echo '```'
+                echo 'Injected frame 17 / pixel 7 mismatch: exact diagnostic and exit code 42 required.'
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              result=$?
+              tail -n 90 "$log"
+              exit "$result"
+            fi
+          done
+      - name: Record scope and actual outcomes
+        if: always()
+        shell: bash
+        env:
+          SOURCE_RESULT: ${{ steps.source.outcome }}
+          VM_RESULT: ${{ steps.vm.outcome }}
+          INTEGRATION_RESULT: ${{ steps.integration.outcome }}
+        run: |
+          {
+            echo "## $MRUBY_FLAVOR / $MRUBY_BOXING"
+            echo "- Tested repository commit: $GITHUB_SHA"
+            echo "- Interpreter base commit: $MRUBY_REVISION"
+            echo "- Source verification/application: $SOURCE_RESULT"
+            echo "- VM build: $VM_RESULT"
+            echo "- Debug and ReleaseSafe comparison/negative-control execution: $INTEGRATION_RESULT"
+            echo '- The published-patch target checks patched state fields and division semantics in the running VM.'
+            echo '- The host table/upload sink is a test contract, NOT the DragonRuby SDK ABI or renderer.'
+          } >> "$GITHUB_STEP_SUMMARY"

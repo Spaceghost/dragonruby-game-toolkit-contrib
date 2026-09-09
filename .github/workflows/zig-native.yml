@@ -1,0 +1,156 @@
+name: Zig native extensions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - .github/workflows/zig-native.yml
+  pull_request:
+    paths:
+      - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - .github/workflows/zig-native.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR branches use pull_request; main uses push, avoiding duplicate suites.
+concurrency:
+  group: zig-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernels:
+    name: Native tests (${{ matrix.runner }})
+    # Only standard hosted labels: free runner compute for public repositories.
+    # No larger runners, self-hosted machines, secrets, caches or artifact uploads.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            archive: x86_64-linux
+            target: x86_64-linux-gnu
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04-arm
+            archive: aarch64-linux
+            target: aarch64-linux-gnu
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+          - runner: windows-2022
+            archive: x86_64-windows
+            target: x86_64-windows-gnu
+            sha256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e
+          - runner: macos-15
+            archive: aarch64-macos
+            target: aarch64-macos
+            sha256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+          - runner: macos-15-intel
+            archive: x86_64-macos
+            target: x86_64-macos
+            sha256: 0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7
+    defaults:
+      run:
+        shell: bash
+        working-directory: samples/12_c_extensions/11_zig_native_pixel_arrays
+    env:
+      ZIG_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned Zig for this runner
+        shell: python
+        env:
+          ZIG_ARCHIVE: ${{ matrix.archive }}
+          ZIG_SHA256: ${{ matrix.sha256 }}
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import tarfile
+          import time
+          import urllib.request
+          import zipfile
+
+          version = Path('.zig-version').read_text().strip()
+          if version != '0.16.0':
+              raise SystemExit('Update the archive checksums when changing Zig.')
+          stem = f"zig-{os.environ['ZIG_ARCHIVE']}-{version}"
+          suffix = '.zip' if os.name == 'nt' else '.tar.xz'
+          temp = Path(os.environ['RUNNER_TEMP'])
+          archive = temp / (stem + suffix)
+          url = f'https://ziglang.org/download/{version}/{archive.name}'
+          for attempt in range(3):
+              try:
+                  with urllib.request.urlopen(url, timeout=60) as response:
+                      with archive.open('wb') as output:
+                          shutil.copyfileobj(response, output)
+                  break
+              except OSError:
+                  if attempt == 2:
+                      raise
+                  time.sleep(attempt + 1)
+          digest = hashlib.sha256()
+          with archive.open('rb') as source:
+              for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                  digest.update(chunk)
+          if digest.hexdigest() != os.environ['ZIG_SHA256']:
+              raise SystemExit('Zig archive checksum mismatch; refusing extraction.')
+          if suffix == '.zip':
+              with zipfile.ZipFile(archive) as package:
+                  package.extractall(temp)
+          else:
+              with tarfile.open(archive) as package:
+                  package.extractall(temp, filter='data')
+          binary_dir = temp / stem
+          binary = binary_dir / ('zig.exe' if os.name == 'nt' else 'zig')
+          actual = subprocess.check_output([str(binary), 'version'], text=True).strip()
+          if actual != version:
+              raise SystemExit(f'Unexpected Zig version: {actual}')
+          with open(os.environ['GITHUB_PATH'], 'a', encoding='utf-8') as output:
+              output.write(str(binary_dir) + '\n')
+          print(f'Installed verified Zig {actual} for {os.environ["ZIG_ARCHIVE"]}')
+      - name: SDK smoke orchestration tests (no SDK)
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Zig formatting
+        run: zig fmt --check build.zig app
+      - name: Shell and Ruby syntax
+        if: matrix.runner == 'ubuntu-24.04'
+        run: |
+          sh -n pre.sh
+          ruby -c app/main.rb
+          ruby -c tests/smoke.rb
+          ruby -c tests/mruby_config.rb
+      - name: Execute Debug unit and C ABI tests
+        id: debug
+        run: zig build test -Dtarget="$ZIG_TARGET" -Doptimize=Debug -Dcpu=baseline --summary all
+      - name: Execute ReleaseSafe unit and C ABI tests
+        id: release
+        run: zig build test -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSafe -Dcpu=baseline --summary all
+      - name: Compile-only cross-target checks (no DragonRuby SDK)
+        if: matrix.runner == 'ubuntu-24.04'
+        run: |
+          for target in aarch64-linux-gnu x86_64-windows-gnu aarch64-macos x86_64-macos; do
+            zig build check -Dtarget="$target" -Doptimize=ReleaseSafe -Dcpu=baseline --summary all
+          done
+      - name: Record validation scope
+        if: always()
+        env:
+          DEBUG_RESULT: ${{ steps.debug.outcome }}
+          RELEASE_RESULT: ${{ steps.release.outcome }}
+        run: |
+          {
+            echo "## Native execution: $ZIG_TARGET"
+            echo
+            echo "- Debug tests: $DEBUG_RESULT"
+            echo "- ReleaseSafe tests: $RELEASE_RESULT"
+            echo "- Zig unit tests, static/dynamic C ABI and protected-page tests execute on this runner."
+            echo "- Python tests cover SDK smoke orchestration, not the proprietary SDK."
+            echo "- The DragonRuby SDK adapter and graphical runtime are not tested here."
+            echo "- Standard GitHub-hosted runner; no uploaded artifacts or cache storage."
+          } >> "$GITHUB_STEP_SUMMARY"

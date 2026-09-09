@@ -1,0 +1,5 @@
+devid=dragonruby
+devtitle=DragonRuby LLC
+gameid=zig-native-pixel-arrays
+gametitle=Zig Native Pixel Arrays
+version=1.0
