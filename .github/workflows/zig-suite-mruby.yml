@@ -1,0 +1,101 @@
+name: Zig suite Ruby integration
+
+on:
+  pull_request:
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - 'samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb'
+      - 'docs/dragonruby-mruby.patch'
+      - '.github/workflows/zig-suite-mruby.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-suite-mruby.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zig-suite-mruby-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruby:
+    name: Suite Ruby (${{ matrix.flavor }}, ${{ matrix.boxing }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [upstream-3.4, dragonruby-3.0]
+        boxing: [word, nan, none]
+        include:
+          - flavor: upstream-3.4
+            revision: a309524d0bc90eef077a24634db2495a6f68e318
+          - flavor: dragonruby-3.0
+            revision: 0f45836b5954accf508f333f932741b925214471
+    env:
+      MRUBY_BOXING: ${{ matrix.boxing }}
+      MRUBY_FLAVOR: ${{ matrix.flavor }}
+      MRUBY_REVISION: ${{ matrix.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: mruby/mruby
+          ref: ${{ matrix.revision }}
+          path: .ci-mruby
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify sources and prepare the matching real VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci-mruby rev-parse HEAD)" = "$MRUBY_REVISION"
+          test -z "$(git -C .ci-mruby status --porcelain --untracked-files=all)"
+          test "$(git hash-object samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb)" = 26c9893094785dcc25c135c0fafb4fa266b3202c
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then
+            patch="$GITHUB_WORKSPACE/docs/dragonruby-mruby.patch"
+            test "$(git hash-object "$patch")" = bd85545b27f4c6397da251ca05ead018cecb9818
+            git -C .ci-mruby apply --check --index "$patch"
+            git -C .ci-mruby apply --index "$patch"
+          fi
+          export MRUBY_CONFIG="$GITHUB_WORKSPACE/samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb"
+          if ! (cd .ci-mruby && rake -j2 > "$RUNNER_TEMP/mruby-build.log" 2>&1); then
+            tail -n 80 "$RUNNER_TEMP/mruby-build.log"
+            exit 1
+          fi
+      - name: Install checksum-pinned Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+      - name: Execute Ruby methods, exceptions, GC and VM lifetimes
+        working-directory: samples/12_c_extensions/12_zig_suite/bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -c smoke.rb
+          ruby -c ../app/main.rb
+          published=false
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
+          for mode in Debug ReleaseSafe ReleaseFast; do
+            log="$RUNNER_TEMP/suite-ruby-$mode.log"
+            zig build test -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" \
+              -Dboxing="$MRUBY_BOXING" -Dpublished="$published" \
+              -Doptimize="$mode" -Dcpu=baseline --summary all 2>&1 | tee "$log"
+            test "$(grep -c '^RUBY_SUITE_PROOF ' "$log")" = 1
+            {
+              echo "### $MRUBY_FLAVOR / $MRUBY_BOXING / $mode"
+              echo "Tested merge-test commit: $GITHUB_SHA"
+              echo '```text'
+              grep '^RUBY_SUITE_PROOF ' "$log"
+              echo '```'
+              echo 'Real mruby, test-only host table and pixel sink; not proprietary SDK or GPU validation.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
