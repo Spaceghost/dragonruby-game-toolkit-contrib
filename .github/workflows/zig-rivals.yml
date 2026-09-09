@@ -1,0 +1,83 @@
+name: C and Zig matched competition
+on:
+  pull_request:
+    paths:
+      - 'samples/12_c_extensions/**'
+      - '.github/workflows/zig-rivals.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/**'
+      - '.github/workflows/zig-rivals.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zig-rivals-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  rivals:
+    name: Matched rivals (${{ matrix.runner }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cpu: baseline
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04
+            cpu: native
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04-arm
+            cpu: native
+            archive: aarch64-linux
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+    defaults:
+      run:
+        shell: bash
+        working-directory: samples/12_c_extensions/12_zig_suite/competition
+    env:
+      ZIG_CPU: ${{ matrix.cpu }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install pinned Zig and prepare evidence directory
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          SHA256: ${{ matrix.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rivals"
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-$ARCHIVE-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "$SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-$ARCHIVE-0.16.0" >> "$GITHUB_PATH"
+      - name: Check semantics, bounds and report arithmetic
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s ../tools -p test_measure.py -v
+          python3 test_report.py -v
+          for mode in Debug ReleaseSafe ReleaseFast; do
+            zig build test -Doptimize="$mode" -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/rivals/test-$mode.log"
+          done
+      - name: Require compiled C and Zig source mutants to fail correctly
+        run: |
+          set -euo pipefail
+          python3 mutations.py --cpu "$ZIG_CPU" 2>&1 | tee "$RUNNER_TEMP/rivals/mutations.log"
+      - name: Measure both contenders, baselines and allocator traffic
+        run: |
+          python3 run.py --cpu "$ZIG_CPU" --output "$RUNNER_TEMP/rivals"
+          cat "$RUNNER_TEMP/rivals/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain raw results, code sizes and disassembly
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rivals-${{ matrix.runner }}-${{ matrix.cpu }}
+          path: ${{ runner.temp }}/rivals
+          if-no-files-found: error
+          retention-days: 30

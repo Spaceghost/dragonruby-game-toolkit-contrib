@@ -6,5 +6,9 @@
   "measure/native.c": "Native workload timing, differential checks and scoped allocation guard",
   "measure/sqlite.c": "Real SQLite allocation profiling, retained wrapper controls and direct-operation comparisons",
   "measure/sqlite_direct.c": "Independent direct-C batch control with matched error and cleanup semantics; not original sample code",
-  "measure/ruby.c": "Real mruby allocator-hook profiling and Ruby-to-Zig batch timing through the test adapter"
+  "measure/ruby.c": "Real mruby allocator-hook profiling and Ruby-to-Zig batch timing through the test adapter",
+  "src/competitive.h": "Shared native contracts for matched C and Zig performance candidates",
+  "src/competitive.c": "Readable Clang-vector C candidates receiving the same algorithmic optimizations as Zig",
+  "competition/test.c": "Independent LF specification, original-star differential tests and guarded-memory checks for both rivals",
+  "competition/bench.c": "Matched C/Zig competition with frozen controls and separately profiled allocations"
 }
