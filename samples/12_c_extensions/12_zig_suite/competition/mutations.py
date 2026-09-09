@@ -17,11 +17,17 @@ def main() -> None:
     for language in ('c', 'zig'):
         original = ROOT.parent / 'src' / f'competitive.{language}'
         text = original.read_text()
+        vector = ("const bytes32 newline = (bytes32)'\\n';" if language == 'c'
+                  else "const newline: V = @splat('\\n');")
+        chunk = ('if (pairs > 255) pairs = 255;' if language == 'c'
+                 else '@min((bytes.len - offset) / 64, 255)')
         for name, old, new, code, diagnostic in (
-            ('newline', "'\\n'", "'\\r'", 45, 'RIVAL_COUNT_MISMATCH'),
+            ('vector-newline', vector, vector.replace("'\\n'", "'\\r'"), 45, 'RIVAL_COUNT_MISMATCH'),
+            ('lane-overflow', chunk, chunk.replace('255', '256'), 45, 'RIVAL_COUNT_MISMATCH'),
             ('star-direction', 'vx + vs', 'vx - vs', 46, 'RIVAL_STAR_MISMATCH'),
         ):
-            assert old in text
+            if text.count(old) != 1:
+                raise RuntimeError(f'Mutation anchor changed: {language}/{name}')
             with tempfile.TemporaryDirectory(prefix='rival-mutant-') as tmp:
                 folder = Path(tmp)
                 mutant = folder / original.name

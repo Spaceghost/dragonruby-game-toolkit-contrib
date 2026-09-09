@@ -11,10 +11,14 @@ implementations of two shared ideas:
 
 * Newline counting uses two independent 32-byte accumulators. Each sees at most
   255 blocks before widening; pair lanes are at most 510 and the reduction is
-  at most 16320. A single residual block needs only an 8-bit reduction.
+  at most 16320. Inputs shorter than 128 bytes skip that accumulation setup.
+  Residual 32/16/8-byte vectors are counted with bounded loads and byte
+  reductions; at most seven bytes remain for the scalar tail.
 * Star motion uses eight-lane SoA arithmetic when no star wraps. A short,
   ordinary scalar loop handles exceptional blocks, rather than eight manually
-  duplicated fallback paths. It preserves star order and x-before-y RNG calls.
+  duplicated fallback paths. The helper is deliberately not inlined in either
+  language, keeping RNG calls out of the fast loop. It preserves star order
+  and x-before-y RNG calls; the call cost is included for wrapping blocks.
 
 The C candidate uses **Clang vector extensions**, not ISO-only C and not a claim
 about GCC. Both are compiled by the pinned Zig 0.16.0 distribution (bundled Clang
@@ -51,9 +55,9 @@ to arithmetic extracted from the pinned original C. They cover all 65536 paired
 8-star x/y wrap masks, exact float bits and RNG consumption, generated finite
 inputs, signed zero/subnormal/boundary values, every 16-byte LF mask, chunk/tail
 boundaries, sentinel stores, read-only inputs and guarded pages. Counters report
-completed comparisons, not an estimate. Four source mutants (wrong LF byte and
-wrong star direction, in each language) must compile and fail the unchanged
-harness with the intended diagnostic. These are finite tests, not formal proof.
+completed comparisons, not an estimate. Six source mutants (wrong SIMD LF byte,
+byte-lane accumulation overflow and wrong star direction, in each language) must
+compile and fail the unchanged harness with the intended diagnostic. These are finite tests, not formal proof.
 
 ## Reproduce
 
@@ -81,3 +85,13 @@ reported or removed explicitly, never silently relabeled as wins.
 Primary language references:
 https://clang.llvm.org/docs/LanguageExtensions.html#vectors-and-extended-vectors
 https://ziglang.org/documentation/0.16.0/#Vectors
+
+## Optimization history
+
+The first candidates are retained in Git at `8c2488a`. On that run's x86 native
+host, the new 4 KiB LF implementation beat the previous Zig baseline, but the
+short-input scalar tails regressed. Disassembly also showed that a short scalar
+star helper was still inlined/unrolled by the compiler, especially in Zig.
+The next experiment adds bounded vector tails and explicitly outlines that
+exceptional helper in both languages. Fresh results, not source length or the
+word `noinline`, decide whether those changes help each workload.

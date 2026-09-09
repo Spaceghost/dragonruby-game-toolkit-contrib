@@ -9,7 +9,7 @@ pub fn countDual(bytes: []const u8) usize {
     const zero: V = @splat(0);
     var offset: usize = 0;
     var total: usize = 0;
-    while (bytes.len - offset >= 64) {
+    while (bytes.len - offset >= 128) {
         const pairs: usize = @min((bytes.len - offset) / 64, 255);
         const end = offset + pairs * 64;
         var even: V = zero;
@@ -25,17 +25,28 @@ pub fn countDual(bytes: []const u8) usize {
         const wide_odd: @Vector(32, u16) = @intCast(odd);
         total += @reduce(.Add, wide_even + wide_odd);
     }
-    if (bytes.len - offset >= 32) {
+    while (bytes.len - offset >= 32) {
         const value: V = bytes[offset..][0..32].*;
         // One block has at most 32 hits, so byte reduction is exact.
         total += @reduce(.Add, @select(u8, value == newline, one, zero));
         offset += 32;
     }
+    // Two bounded vector fragments leave at most seven scalar tail bytes.
+    inline for (.{ 16, 8 }) |width| {
+        if (bytes.len - offset >= width) {
+            const Tail = @Vector(width, u8);
+            const value: Tail = bytes[offset..][0..width].*;
+            const hits = value == @as(Tail, @splat('\n'));
+            total += @reduce(.Add, @select(u8, hits, @as(Tail, @splat(1)), @as(Tail, @splat(0))));
+            offset += width;
+        }
+    }
     for (bytes[offset..]) |byte| total += @intFromBool(byte == '\n');
     return total;
 }
 
-fn scalarBlock(x: []f32, y: []f32, speed: []const f32, random: Random, context: ?*anyopaque) void {
+// Keep RNG calls and their register pressure out of the no-wrap loop.
+noinline fn scalarBlock(x: []f32, y: []f32, speed: []const f32, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
     for (x, y, speed) |*px, *py, delta| {
         px.* += delta;
@@ -64,7 +75,7 @@ pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, contex
             y[i..][0..8].* = ny;
         }
     }
-    scalarBlock(x[i..], y[i..], speed[i..], random, context);
+    if (i < x.len) scalarBlock(x[i..], y[i..], speed[i..], random, context);
 }
 
 export fn drbz_count_dual(bytes: [*c]const u8, length: usize) usize {
