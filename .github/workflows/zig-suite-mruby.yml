@@ -99,3 +99,33 @@ jobs:
               echo 'Real mruby, test-only host table and pixel sink; not proprietary SDK or GPU validation.'
             } >> "$GITHUB_STEP_SUMMARY"
           done
+      - name: Measure Ruby calls and actual VM allocator traffic
+        working-directory: samples/12_c_extensions/12_zig_suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/ruby-measurement-proof"
+          mkdir -p "$proof"
+          cp "$RUNNER_TEMP/mruby-build.log" "$proof/"
+          cp "$RUNNER_TEMP"/suite-ruby-*.log "$proof/"
+          {
+            echo "mruby_revision=$MRUBY_REVISION"
+            echo "flavor=$MRUBY_FLAVOR boxing=$MRUBY_BOXING"
+            sha256sum "$GITHUB_WORKSPACE/.ci-mruby/build/host/lib/libmruby.a"
+            sha256sum ../11_zig_native_pixel_arrays/tests/mruby_config.rb
+            sha256sum "$GITHUB_WORKSPACE/docs/dragonruby-mruby.patch"
+          } > "$proof/vm-provenance.txt"
+          published=false
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
+          (cd measure && zig build -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" \
+            -Dboxing="$MRUBY_BOXING" -Dpublished="$published" \
+            -Doptimize=ReleaseFast -Dcpu=baseline --summary all) 2>&1 | tee "$proof/build.log"
+          python3 tools/benchmark_evidence.py --kind ruby --processes 3 --trials 11 --min-ns 2000000 --output "$proof"
+      - name: Retain Ruby measurement evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: measurement-ruby-${{ matrix.flavor }}-${{ matrix.boxing }}
+          path: ${{ runner.temp }}/ruby-measurement-proof
+          if-no-files-found: warn
+          retention-days: 30

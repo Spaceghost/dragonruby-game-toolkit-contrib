@@ -1,0 +1,32 @@
+{
+  "native": {
+    "native/lf/31": ["c_control", "zig_previous16", "zig_blocked32"],
+    "native/lf/32": ["c_control", "zig_previous16", "zig_blocked32"],
+    "native/lf/33-misaligned": ["c_control", "zig_previous16", "zig_blocked32"],
+    "native/lf/4k": ["c_control", "zig_previous16", "zig_blocked32"],
+    "native/lf/1m-warm": ["c_control", "zig_previous16", "zig_blocked32"],
+    "native/lf/1m-rotating16m": ["c_control", "zig_previous16", "zig_blocked32"],
+    "native/sum/8": ["c_control", "zig_ordered", "zig_unrolled"],
+    "native/sum/65536": ["c_control", "zig_ordered", "zig_unrolled"],
+    "native/scanner": ["c_original_kernel", "zig_previous", "zig_dirty_rows"],
+    "native/stars/16384": ["c_original_kernel", "zig_scalar", "zig_soa8"],
+    "native/stars/all-wrap": ["c_original_kernel", "zig_scalar", "zig_soa8"],
+    "native/regex/early": ["c_original", "zig_baseline", "zig_optimized"],
+    "native/regex/late": ["c_original", "zig_baseline", "zig_optimized"],
+    "native/regex/absent": ["c_original", "zig_baseline", "zig_optimized"],
+    "native/regex/dense-prefix": ["c_original", "zig_baseline", "zig_optimized"],
+    "native/regex/compile-and-search": ["c_original", "zig_baseline", "zig_optimized"],
+    "native/call-envelope": ["c_noop"]
+  },
+  "sqlite": {
+    "sqlite/prepare-reuse": ["c_each", "zig_each", "c_reuse", "zig_reuse"]
+  },
+  "ruby": {
+    "ruby/lf/128": ["ruby_byte_loop", "ffi_zig"],
+    "ruby/sum/64": ["ruby_loop", "ffi_zig"],
+    "ruby/hello/128": ["ruby_concat", "ffi_zig"],
+    "ruby/literal/4096": ["ruby_string_index", "ffi_tinyregex_compile_each"],
+    "ruby/scanner-test-sink": ["ffi_zig"],
+    "ruby/loop-envelope": ["ruby_loop"]
+  }
+}

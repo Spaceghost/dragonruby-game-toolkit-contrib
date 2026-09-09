@@ -1,7 +1,7 @@
 """Require an explicit disposition for every tracked native source/header.
 
 Read Git blobs, not working-tree symlink targets. Original-source changes and
-new unclassified native files require a reviewed COVERAGE.json update.
+new unclassified native files require a reviewed coverage-manifest update.
 """
 from __future__ import annotations
 import json
@@ -25,11 +25,13 @@ def main() -> None:
             if name in expected:
                 raise SystemExit(f'Duplicate coverage entry: {name}')
             expected[name] = (sha, group['role'])
-    for relative, role in coverage['suite_native_files'].items():
-        name = SUITE + relative
-        if name in expected:
-            raise SystemExit(f'Duplicate coverage entry: {name}')
-        expected[name] = (None, role)
+    measurement_files = json.loads((root / SUITE / 'measure/COVERAGE.json').read_text())
+    for manifest in (coverage['suite_native_files'], measurement_files):
+        for relative, role in manifest.items():
+            name = SUITE + relative
+            if name in expected:
+                raise SystemExit(f'Duplicate coverage entry: {name}')
+            expected[name] = (None, role)
     raw = subprocess.check_output(['git', 'ls-files', '--stage', '-z'], cwd=root)
     rows, seen = [], set()
     for entry in raw.split(b'\0'):
@@ -43,7 +45,7 @@ def main() -> None:
         if stage != '0':
             raise SystemExit(f'Unmerged native source: {path}')
         if path not in expected:
-            raise SystemExit(f'Unclassified native source: {path}; update COVERAGE.json')
+            raise SystemExit(f'Unclassified native source: {path}; update the coverage manifest')
         pin, role = expected[path]
         if pin is not None and sha != pin:
             raise SystemExit(f'Original source changed: {path}: {sha} != {pin}')

@@ -1,0 +1,85 @@
+name: Zig allocation and benchmark evidence
+on:
+  pull_request:
+    paths:
+      - 'samples/12_c_extensions/**'
+      - '.github/workflows/zig-measure.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/**'
+      - '.github/workflows/zig-measure.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zig-measure-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  evidence:
+    name: Allocation evidence (${{ matrix.runner }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cpu: baseline
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04
+            cpu: native
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04-arm
+            cpu: native
+            archive: aarch64-linux
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+    defaults:
+      run:
+        shell: bash
+        working-directory: samples/12_c_extensions/12_zig_suite
+    env:
+      ZIG_CPU: ${{ matrix.cpu }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned toolchain
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+          SHA256: ${{ matrix.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/measurement-proof"
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-$ARCHIVE-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "$SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-$ARCHIVE-0.16.0" >> "$GITHUB_PATH"
+          if ! pkg-config --exists sqlite3; then
+            sudo apt-get update
+            sudo apt-get install -y libsqlite3-dev
+          fi
+      - name: Require correctness and evidence-rejection tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools -p test_measure.py -v
+          zig build test -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/measurement-proof/parity.log"
+          (cd sqlite && zig build test -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all) > "$RUNNER_TEMP/measurement-proof/sqlite-tests.log" 2>&1
+      - name: Build separate timing and profiling executables
+        run: |
+          set -euo pipefail
+          cd measure
+          zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/measurement-proof/build.log"
+      - name: Profile allocations and measure fresh processes
+        run: |
+          python3 tools/benchmark_evidence.py --kind native --processes 3 --trials 11 --min-ns 2000000 --output "$RUNNER_TEMP/measurement-proof"
+      - name: Retain raw evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: measurement-${{ matrix.runner }}-${{ matrix.cpu }}
+          path: ${{ runner.temp }}/measurement-proof
+          if-no-files-found: error
+          retention-days: 30

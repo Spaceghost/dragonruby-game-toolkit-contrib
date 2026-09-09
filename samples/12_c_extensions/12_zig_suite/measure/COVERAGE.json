@@ -1,0 +1,9 @@
+{
+  "measure/bench.h": "Adaptive timing and allocation-report harness; test-only C, not a Zig port",
+  "measure/meter.h": "Measurement-only allocator counter contract",
+  "measure/libc_meter.c": "GNU linker-wrapped libc allocator counters and exercised positive/failure controls",
+  "measure/noop.c": "Separately compiled call-envelope control; never subtracted from timings",
+  "measure/native.c": "Native workload timing, differential checks and scoped allocation guard",
+  "measure/sqlite.c": "Real SQLite allocator-hook profiling and matched C/Zig prepare/reuse comparison",
+  "measure/ruby.c": "Real mruby allocator-hook profiling and Ruby-to-Zig batch timing through the test adapter"
+}
