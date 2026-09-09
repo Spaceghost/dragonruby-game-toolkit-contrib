@@ -7,8 +7,10 @@
 
 // Single-threaded link-reference instrumentation. It deliberately does not
 // claim to intercept shared-library internals, mmap or every allocator API.
-static int armed;
-static uint64_t counts[6];
+// The compiler cannot see link-time --wrap rewriting. Volatile prevents it
+// from assuming external allocator calls cannot touch these private counters.
+static volatile int armed;
+static volatile uint64_t counts[6];
 void *__real_malloc(size_t);
 void *__real_calloc(size_t, size_t);
 void *__real_realloc(void *, size_t);
@@ -33,10 +35,10 @@ static void calibrate(void) {
     CHECK("probe posix_memalign", posix_memalign(&d, 64, 64) == 0 && d);
     free(a); free(b); free(c); free(d);
     armed = 0;
+    printf("ALLOCATOR_CALIBRATION {\"malloc\":%" PRIu64 ",\"calloc\":%" PRIu64 ",\"realloc\":%" PRIu64 ",\"aligned_alloc\":%" PRIu64 ",\"posix_memalign\":%" PRIu64 ",\"free\":%" PRIu64 "}\n", counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
     for (size_t i = 0; i < 5; ++i) CHECK("probe interception", counts[i] == 1);
     CHECK("probe free interception", counts[5] == 4);
-    printf("ALLOCATOR_CALIBRATION {\"malloc\":%" PRIu64 ",\"calloc\":%" PRIu64 ",\"realloc\":%" PRIu64 ",\"aligned_alloc\":%" PRIu64 ",\"posix_memalign\":%" PRIu64 ",\"free\":%" PRIu64 "}\n", counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
-    memset(counts, 0, sizeof counts);
+    for (size_t i = 0; i < 6; ++i) counts[i] = 0;
 }
 int main(void) {
     calibrate();
