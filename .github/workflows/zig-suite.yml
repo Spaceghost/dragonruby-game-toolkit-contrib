@@ -12,11 +12,12 @@ on:
       - '**/*.cxx'
       - '**/*.hpp'
       - 'samples/12_c_extensions/12_zig_suite/**'
+      - 'samples/12_c_extensions/11_zig_native_pixel_arrays/app/native.zig'
       - '.github/workflows/zig-suite.yml'
   push:
     branches: [main]
     paths:
-      - 'samples/12_c_extensions/12_zig_suite/**'
+      - 'samples/12_c_extensions/**'
       - '.github/workflows/zig-suite.yml'
   workflow_dispatch:
 
@@ -36,6 +37,8 @@ jobs:
         with:
           persist-credentials: false
       - run: python samples/12_c_extensions/12_zig_suite/tools/inventory.py
+      - name: Reject invalid benchmark evidence
+        run: python samples/12_c_extensions/12_zig_suite/tools/test_report.py -v
 
   portable:
     name: Portable kernels (${{ matrix.runner }}, ${{ matrix.cpu }})
@@ -90,18 +93,17 @@ jobs:
       - name: ReleaseFast parity and interleaved measurements
         run: |
           set -euo pipefail
-          zig build bench -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/zig-bench.log"
+          python tools/measure.py kernels --cpu "$ZIG_CPU" --output "$RUNNER_TEMP/zig-bench.log"
           python tools/report.py "$RUNNER_TEMP/zig-bench.log"
-      - name: Real SQLite lifecycle and statement-reuse measurements
+      - name: Real SQLite lifecycle and matched reuse measurements
         run: |
           set -euo pipefail
           if ! pkg-config --exists sqlite3; then
             sudo apt-get update
             sudo apt-get install -y libsqlite3-dev
           fi
-          cd sqlite
-          for mode in Debug ReleaseSafe ReleaseFast; do
-            zig build test -Doptimize="$mode" -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/sqlite-$mode.log"
+          for mode in Debug ReleaseSafe; do
+            (cd sqlite && zig build test -Doptimize="$mode" -Dcpu="$ZIG_CPU" --summary all)
           done
-          cd ..
+          python tools/measure.py sqlite --cpu "$ZIG_CPU" --output "$RUNNER_TEMP/sqlite-ReleaseFast.log"
           python tools/report.py "$RUNNER_TEMP/sqlite-ReleaseFast.log"

@@ -24,6 +24,27 @@ pub fn build(b: *std.Build) void {
     check.dependOn(&unit.step);
     const test_step = b.step("test", "Execute differential, bounds, ABI and negative-control tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
+
+    // The exhaustive short regex corpus alone never reaches a SIMD load.
+    // Require long-input original-C parity before permitting any benchmark.
+    const long_regex = b.addExecutable(.{
+        .name = "drbz-regex-long",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    long_regex.root_module.addIncludePath(b.path("src"));
+    long_regex.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../02_intermediate/app") });
+    long_regex.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../11_zig_native_pixel_arrays/tests/support") });
+    long_regex.root_module.addCSourceFile(.{ .file = b.path("evidence/regex_long.c"), .flags = &common });
+    long_regex.root_module.addCSourceFile(.{
+        .file = .{ .cwd_relative = b.pathFromRoot("../02_intermediate/app/re.c") },
+        .flags = &.{ "-std=c11", "-ffp-contract=off" },
+    });
+    long_regex.root_module.linkLibrary(library);
+    check.dependOn(&long_regex.step);
+    const run_long_regex = b.addRunArtifact(long_regex);
+    run_long_regex.has_side_effects = true;
+    test_step.dependOn(&run_long_regex.step);
+
     if (target.result.os.tag != .windows) {
         const apps = b.addExecutable(.{ .name = "drbz-apps", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
         apps.root_module.addIncludePath(b.path("src"));

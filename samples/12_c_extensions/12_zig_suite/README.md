@@ -10,18 +10,22 @@ source and header, including the Rust samples. The audit rejects unclassified
 files, missing implementations and changes to pinned original sources. It does
 not turn a retained SDK adapter into a completed Zig port by relabeling it.
 
+[EVIDENCE.md](EVIDENCE.md) maps claims to executed checks and their limits,
+including calibrated allocator interception, source mutation tests and complete
+benchmark-run validation. These are finite tests, not formal verification.
+
 ## What is implemented
 
 | Original example | Zig implementation | Alternative and validation |
 | --- | --- | --- |
 | `01_basics` square | Checked scalar square | Transactional eight-lane batches; exhaustive comparison over all 92,681 defined signed inputs |
-| `02_intermediate` tiny-regex | Caller-owned compiled patterns and bounded matcher | Character-class bitmaps and SIMD leading-literal search; 480,568 comparisons with the actual C library |
+| `02_intermediate` tiny-regex | Caller-owned compiled patterns and bounded matcher | Character-class bitmaps and SIMD leading-literal search; 480,568 short C comparisons plus long-input, protected-page and separately labeled binary tests |
 | `03_native_pixel_arrays` scanner | Existing faithful Zig sample remains the baseline | Persistent pixels update only changed rows; 10,000 frames compared against extracted original C and previous Zig |
 | `04_handcrafted_extension` Adder | Ordered nested traversal | Fixed 64-frame stack, cycle/depth rejection and unchanged output on error |
 | Advanced starfield | Scalar star motion | Eight-lane structure-of-arrays updates; 3,016,000 star updates compared bit-for-bit, including RNG state and call counts |
 | macOS greetings | Caller-buffer UTF-8 byte formatting | No Foundation temporary strings in the kernel; exact-capacity and short-buffer tests |
 | `09_handcrafted_threads` Worker | Atomic lifecycle with explicit owner-thread controls | Failed creation, idempotent start/stop, restart and 100 real pthread lifetimes |
-| `10_sqlite3` | Connection and statement lifecycle | Checked errors, borrowed column views and prepared-statement reuse measured against real SQLite |
+| `10_sqlite3` | Connection and statement lifecycle | Checked errors, borrowed column views and prepared-statement reuse; matching C prepare-per-query and reuse controls |
 | Previous SIMD LF example | Previous 16-byte implementation remains a benchmark baseline | 32-byte blocked accumulation reduces horizontal-reduction frequency, with guarded-page and chunk-boundary tests |
 
 The square batch and nested traversal are not claimed as measured speedups.
@@ -29,49 +33,62 @@ Strictly ordered sum unrolling is deliberately retained as an experimental
 candidate, including workloads where it loses. No fast-math reassociation is
 used to manufacture a faster but different answer.
 
-## Run the native proof and measurements
+## Run native tests and recorded measurements
 
-Use **Zig 0.16.0**, Python 3 and a C-capable host. From this directory:
+Use **Zig 0.16.0**, Python 3.10+ and a C-capable host. From this directory:
 
 ```sh
 zig build test -Doptimize=Debug -Dcpu=baseline --summary all
 zig build test -Doptimize=ReleaseSafe -Dcpu=baseline --summary all
-zig build bench -Doptimize=ReleaseFast -Dcpu=native --summary all > bench.log 2>&1
-ZIG_CPU=native ZIG_OPTIMIZE=ReleaseFast python tools/report.py bench.log
+python tools/test_report.py -v
+python tools/measure.py kernels --cpu native --output bench.log
+python tools/report.py bench.log
 ```
 
-`bench` depends on the correctness suite. It warms each implementation, runs
-11 interleaved trials in shuffled order, validates observable checksums, and
-prints every raw `BENCH` record. The report includes median, minimum, maximum,
-median absolute deviation, CPU/OS/toolchain metadata and ratios to the C
-control. A noisy result is labeled, not converted into a brittle CI speed gate.
-C and Zig receive the same optimization mode and CPU target; the C optimizer
-is not artificially disabled.
+`bench` depends on the correctness suite, including long regex inputs that
+reach the SIMD loop. It warms each implementation, runs 11 interleaved trials
+in shuffled order, validates observable checksums, and prints every raw
+`BENCH` record. The recorder captures source hashes, command, CPU, OS and
+compiler information at execution. The reporter refuses incomplete or
+inconsistent runs rather than reconstructing metadata on the reporting host.
+Old bare logs without capture provenance are not accepted as new measurements.
+
+Results include median, minimum, maximum, median absolute deviation, noise
+flags and an explicit reference variant. A noisy result is not converted into
+a brittle CI speed gate. C and Zig receive the same optimization mode and CPU
+target; the C optimizer is not artificially disabled.
 
 The deliberately corrupted scanner run must return **42** and exactly identify
 frame 17 / pixel 7. An unrelated crash does not count as successful detection.
-Debug and ReleaseSafe test the same vectorized paths used by ReleaseFast.
+The separate Linux evidence workflow compiles four source mutants and requires
+the intended runtime failures. To run it, use native system cc and a
+GNU-compatible linker in addition to the pinned Zig toolchain:
+
+```sh
+python tools/mutations.py --cpu baseline
+```
 
 The suite's CI executes on standard hosted Linux x86-64 and ARM64 runners.
 The x86 matrix includes baseline and host-native CPU targets. This is not a
 claim that the new suite has inherited the old sample's Windows/macOS results.
 
-For the separate real-SQLite tests and repeated-query measurements, install
-the host SQLite development library, then run:
+For real-SQLite tests and repeated-query measurements, install the host SQLite
+development library, then run from the suite directory:
 
 ```sh
-cd sqlite
-zig build test -Doptimize=ReleaseSafe -Dcpu=native --summary all
-zig build test -Doptimize=ReleaseFast -Dcpu=native --summary all > sqlite.log 2>&1
-ZIG_CPU=native ZIG_OPTIMIZE=ReleaseFast python ../tools/report.py sqlite.log
+(cd sqlite && zig build test -Doptimize=ReleaseSafe -Dcpu=native --summary all)
+python tools/measure.py sqlite --cpu native --output sqlite.log
+python tools/report.py sqlite.log
 ```
 
 SQLite is still the upstream C engine. The Zig wrapper does not allocate its
 own error strings, but SQLite itself allocates. Tests force an execution-time
 query error, failed open, constraint error and busy close, check NULL/empty/
-binary column values, and verify that statements are released. Reuse is an
-API/workload optimization that a C caller could also implement, not evidence
-that translating the same SQLite call into Zig makes SQLite faster.
+binary column values, and verify that statements are released. Both C and Zig
+now have prepare-per-query and statement-reuse implementations with matching
+prepare flags and reset/clear-bindings policy. `zig_reuse` is compared with
+`c_reuse`: translating a wrapper is not credited with avoiding work that C can
+also avoid. Historical timings remain specific to their earlier controls.
 
 ## Call the new functions from Ruby
 
@@ -122,12 +139,16 @@ public mruby tests cannot establish proprietary host-table compatibility.
 ## Ownership and compatibility boundaries
 
 The native kernels accept caller-owned buffers and do not call a heap
-allocator. This is a source/API property, **not an instrumented allocation
-count**: raw benchmark records use `allocation_count: null`. Ruby allocation,
-thread creation, SQLite internals and rendering are outside that claim.
+allocator. A separate calibrated Linux probe observes six allocator APIs
+while exercising `native.zig` exports and regex compilation/search with a
+nonallocating RNG callback. It does not instrument every exported API or every
+allocation mechanism. See [the exact scope](EVIDENCE.md). Raw timing records
+still use `allocation_count: null` because their timing regions are not
+instrumented. Ruby allocation, thread creation, SQLite internals and rendering
+are outside the allocation-free kernel claim.
+
 Pointers are borrowed only for the documented operation or view lifetime.
 Callbacks must not raise through a Zig frame or execute Ruby from a worker.
-
 Square overflow, malformed/oversized regexes, deep/cyclic arrays and oversized
 greetings are reported explicitly rather than reproducing undefined behavior
 or unbounded recursion. Regex parity covers the shipped tiny-regex dialect on
@@ -139,8 +160,8 @@ match-length behavior. It is not the Rust `rure`/Unicode regex engine.
 The native SoA starfield, worker and SQLite APIs are usable through their C
 headers, but batched Ruby star objects/drawing, the SDL worker adapter and a
 replacement Ruby `query_json` adapter are not yet wired into this sample game.
-End-to-end Ruby/renderer and allocation-profile measurements remain separate
-from the kernel benchmarks.
+End-to-end Ruby/renderer and whole-application allocation-profile measurements
+remain separate from the kernel benchmarks and allocator-reference probe.
 
 The original iOS Objective-C main-thread dispatch, macOS framework integration,
 Steamworks C++ shim and Android JNI bridge remain platform boundaries. They

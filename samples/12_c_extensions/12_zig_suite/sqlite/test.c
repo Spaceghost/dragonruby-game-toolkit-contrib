@@ -60,25 +60,39 @@ static uint64_t run(drbz_database *db, int variant, unsigned repetitions) {
     const char *sql = "SELECT CAST(?1 AS TEXT)";
     uint64_t checksum = 0;
     drbz_statement statement;
+    sqlite3_stmt *original = NULL;
     drbz_sql_statement_init(&statement);
     if (variant == 2) assert(drbz_sql_prepare(db, &statement, sql, 1) == SQLITE_OK);
+    if (variant == 3) assert(sqlite3_prepare_v3(db->handle, sql, -1, SQLITE_PREPARE_PERSISTENT, &original, NULL) == SQLITE_OK);
     for (unsigned i = 0; i < repetitions; ++i) {
-        if (variant == 0) {
-            sqlite3_stmt *original = NULL;
-            assert(sqlite3_prepare_v2(db->handle, sql, -1, &original, NULL) == SQLITE_OK);
+        if (variant == 0 || variant == 3) {
+            // Match the wrapper's prepare API and flags, including reuse's
+            // persistent hint. These are controls, not original sample code.
+            if (variant == 0) assert(sqlite3_prepare_v3(db->handle, sql, -1, 0, &original, NULL) == SQLITE_OK);
             assert(sqlite3_bind_int64(original, 1, i) == SQLITE_OK);
             assert(sqlite3_step(original) == SQLITE_ROW);
+            assert(sqlite3_column_type(original, 0) != SQLITE_NULL);
             const unsigned char *value = sqlite3_column_text(original, 0);
+            assert(value);
             int length = sqlite3_column_bytes(original, 0);
             for (int j = 0; j < length; ++j) checksum += value[j];
             assert(sqlite3_step(original) == SQLITE_DONE);
-            assert(sqlite3_finalize(original) == SQLITE_OK);
+            if (variant == 0) {
+                assert(sqlite3_finalize(original) == SQLITE_OK);
+                original = NULL;
+            } else {
+                // Reset alone retains bindings. Both reuse variants clear
+                // them and check both return codes on every iteration.
+                assert(sqlite3_reset(original) == SQLITE_OK);
+                assert(sqlite3_clear_bindings(original) == SQLITE_OK);
+            }
         } else {
             if (variant == 1) assert(drbz_sql_prepare(db, &statement, sql, 0) == SQLITE_OK);
             assert(drbz_sql_bind_int(&statement, 1, i) == SQLITE_OK);
             assert(drbz_sql_step(&statement) == SQLITE_ROW);
             drbz_text text;
             assert(drbz_sql_first_text(&statement, &text) == SQLITE_OK);
+            assert(!text.is_null);
             for (size_t j = 0; j < text.length; ++j) checksum += text.data[j];
             assert(drbz_sql_step(&statement) == SQLITE_DONE);
             if (variant == 1) assert(drbz_sql_finalize(&statement) == SQLITE_OK);
@@ -86,6 +100,7 @@ static uint64_t run(drbz_database *db, int variant, unsigned repetitions) {
         }
     }
     if (variant == 2) assert(drbz_sql_finalize(&statement) == SQLITE_OK);
+    if (variant == 3) assert(sqlite3_finalize(original) == SQLITE_OK);
     return checksum;
 }
 int main(void) {
@@ -93,14 +108,14 @@ int main(void) {
     drbz_database db;
     drbz_sql_init(&db);
     assert(drbz_sql_open(&db, ":memory:") == SQLITE_OK);
-    const char *names[] = {"c_control", "zig_prepare_each", "zig_reuse"};
+    const char *names[] = {"c_control", "zig_prepare_each", "zig_reuse", "c_reuse"};
     const unsigned iterations = 10000;
     uint64_t expected = run(&db, 0, iterations);
-    assert(run(&db, 1, iterations) == expected && run(&db, 2, iterations) == expected);
+    for (int variant = 1; variant < 4; ++variant) assert(run(&db, variant, iterations) == expected);
     printf("SQLITE_ENV {\"version\":\"%s\",\"source_id\":\"%s\",\"scope\":\"in-memory native statement lifecycle, not Ruby or disk I/O\"}\n", sqlite3_libversion(), sqlite3_sourceid());
     for (int trial = 0; trial < 11; ++trial) {
-        for (int slot = 0; slot < 3; ++slot) {
-            int variant = (trial + slot) % 3;
+        for (int slot = 0; slot < 4; ++slot) {
+            int variant = (trial + slot) % 4;
             uint64_t start = now();
             uint64_t checksum = run(&db, variant, iterations);
             uint64_t elapsed = now() - start;
