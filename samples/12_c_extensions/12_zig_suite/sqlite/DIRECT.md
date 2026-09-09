@@ -61,10 +61,12 @@ recovery, partial progress, empty input, busy statements, wrong arity, NULL/empt
 binary columns, consumer rejection, and isolated bind/step/reset/clear failures.
 The injected API failures are explicitly separate from actual-engine tests.
 
-The measurement executables additionally compare the direct C and Zig batch
-entry points over 144 combinations of length, seed and lifecycle flags, including
-32-bit parameter-generator wrap, plus six failing SQL/arity/result cases.
-They check that failures preserve output and leave no outstanding statements.
+The measurement executables additionally make **72 C/Zig comparisons**, each
+executing both implementations: 6 lengths x 3 seeds x 2 reuse modes x 2 clearing
+policies = **144 successful batch calls**, not 144 distinct comparisons. These
+include 32-bit parameter-generator wrap. Six additional failing SQL/arity/result
+cases each execute both implementations, check matching errors and unchanged
+output, and verify that no statements remain. All of these run before timing.
 
 `measure/sqlite_direct.c` is an independent control, not the original sample.
 Both direct implementations use the same SQLite calls, checks, result consumption,
@@ -89,6 +91,41 @@ actual sqlite3_* imports, and rejects drbz_sql_*, mruby and allocation-probe wra
 symbols. Four deliberate bad symbol-list controls verify that the audit rejects
 its intended failures. The installed audit includes the archive's SHA-256. This
 is structural evidence, not a promise of universal performance parity.
+
+## Recorded result, not a portable speed guarantee
+
+Source: `3640916d9f56aa81c790a2713af5531a14121e5c`; tested merge commit:
+`d539dd24788446bdbab0f9f1368135724d63fa24`. Zig 0.16.0 ReleaseFast,
+host-native CPU, SQLite 3.45.1, no LTO, no fast math. Each timing has 33 samples
+from 3 processes x 11 trials. No outliers were removed. These are batch-mean
+native query costs, not Ruby latency or GPU FPS.
+
+| Reuse with binding cleanup | Direct C ns/query | Direct Zig ns/query | Old checked Zig ns/query |
+| --- | ---: | ---: | ---: |
+| EPYC 9V74 x86-64 | 201.309 | 204.035 | 212.401 |
+| Neoverse N2 ARM64 | 257.497 | 256.454 | 267.642 |
+
+The direct path reduces median time relative to the old wrapper by about 4%
+on these runs. It is still about 1.35% behind C on x86, and within about 0.4%
+on ARM. These differences are observations, not claims of statistical equivalence.
+Matched direct rebind medians were 188.349/189.610 ns (C/Zig, x86) and
+241.352/240.192 ns (C/Zig, ARM). Skipping binding cleanup is an explicitly
+different policy, available to both languages, not a language-only speedup.
+
+In the x86 general-allocator profile, each 64-query reuse batch, including
+prepare/finalize, observed 16 allocations, 16 frees and 5,864 requested bytes
+for direct C, direct Zig and the checked Zig control. Live engine bytes returned
+to the pre-batch level and then zero at shutdown. SQLite lookaside was enabled;
+these counters do not count every internal suballocation or process RSS.
+
+[Execution and artifact records](https://github.com/Spaceghost/dragonruby-game-toolkit-contrib/actions/runs/34371374079).
+Artifacts: x86-native `10112181775`, ARM-native `10112183026`.
+Raw JSONL SHA-256:
+
+```text
+x86: 59141736c6201a58fc01b8f7d4be5aa1c0c328b662a344c689ac2aed51b94d02
+ARM: 8989f893fe678fa40179f23e254fe829b854dae0a3888391c85872351f75d2ea
+```
 
 Reproduce from the suite directory:
 

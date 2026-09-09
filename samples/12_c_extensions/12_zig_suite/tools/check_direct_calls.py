@@ -29,10 +29,10 @@ def check_symbols(all_symbols: str, undefined: str) -> list[str]:
 
 def main() -> None:
     archive, destination = map(Path, sys.argv[1:])
-    all_symbols = subprocess.check_output(['nm', str(archive)], text=True)
-    undefined = subprocess.check_output(['nm', '-u', str(archive)], text=True)
+    all_result = subprocess.run(['nm', str(archive)], text=True, capture_output=True, check=True)
+    undefined_result = subprocess.run(['nm', '-u', str(archive)], text=True, capture_output=True, check=True)
+    all_symbols, undefined = all_result.stdout, undefined_result.stdout
     imports = check_symbols(all_symbols, undefined)
-    # Required positive/negative controls exercise the checker itself.
     for bad in ('drbz_sql_step', 'mrb_funcall', '__wrap_malloc'):
         try:
             check_symbols(all_symbols + '\nU ' + bad, undefined)
@@ -48,7 +48,8 @@ def main() -> None:
         raise RuntimeError('Symbol checker accepted missing SQLite operations')
     result = {'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
               'direct_sqlite_imports': imports, 'forbidden_wrapper_symbols': [],
-              'checker_negative_controls': 4,
+              'checker_negative_controls': 4, 'undefined_symbols': undefined,
+              'nm_diagnostics': all_result.stderr + undefined_result.stderr,
               'scope': 'Compiled direct-batch archive; not a performance or whole-program allocation proof'}
     destination.write_text(json.dumps(result, indent=2) + '\n')
     print('DIRECT_CALL_EVIDENCE ' + json.dumps(result, sort_keys=True))

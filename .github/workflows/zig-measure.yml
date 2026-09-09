@@ -72,6 +72,8 @@ jobs:
           set -euo pipefail
           cd measure
           zig build -Doptimize=ReleaseFast -Dcpu="$ZIG_CPU" --summary all 2>&1 | tee "$RUNNER_TEMP/measurement-proof/build.log"
+          cp zig-out/direct-call-audit.json "$RUNNER_TEMP/measurement-proof/direct-call-audit.json"
+          cat "$RUNNER_TEMP/measurement-proof/direct-call-audit.json"
       - name: Profile allocations and measure fresh processes
         run: |
           python3 tools/benchmark_evidence.py --kind native --processes 3 --trials 11 --min-ns 2000000 --output "$RUNNER_TEMP/measurement-proof"
