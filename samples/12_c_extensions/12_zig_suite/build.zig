@@ -8,13 +8,13 @@ comptime {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const module = b.createModule(.{ .root_source_file = b.path("src/native.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    const module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
     const library = b.addLibrary(.{ .name = "drbz_suite", .linkage = .static, .root_module = module });
     const legacy = b.addLibrary(.{ .name = "drbz_previous", .linkage = .static, .root_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = b.pathFromRoot("../11_zig_native_pixel_arrays/app/native.zig") },
         .target = target, .optimize = optimize, .link_libc = true,
     }) });
-    const unit = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/native.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
+    const unit = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
     const reference = b.addSystemCommand(&.{ "python", "tools/reference.py" });
     reference.addFileArg(.{ .cwd_relative = b.pathFromRoot("../04_handcrafted_extension_advanced/native/ext-bindings.c") });
     reference.addFileArg(.{ .cwd_relative = b.pathFromRoot("../03_native_pixel_arrays/app/ext.c") });
@@ -24,6 +24,17 @@ pub fn build(b: *std.Build) void {
     check.dependOn(&unit.step);
     const test_step = b.step("test", "Execute differential, bounds, ABI and negative-control tests");
     test_step.dependOn(&b.addRunArtifact(unit).step);
+    if (target.result.os.tag != .windows) {
+        const apps = b.addExecutable(.{ .name = "drbz-apps", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
+        apps.root_module.addIncludePath(b.path("src"));
+        apps.root_module.addCSourceFile(.{ .file = b.path("tests/apps.c"), .flags = &common });
+        apps.root_module.linkLibrary(library);
+        apps.root_module.linkSystemLibrary("pthread", .{});
+        check.dependOn(&apps.step);
+        const run_apps = b.addRunArtifact(apps);
+        run_apps.has_side_effects = true;
+        test_step.dependOn(&run_apps.step);
+    }
     for ([_]bool{ false, true }) |benchmark| {
         const exe = b.addExecutable(.{ .name = if (benchmark) "drbz-bench" else "drbz-test", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
         exe.root_module.addIncludePath(b.path("src"));

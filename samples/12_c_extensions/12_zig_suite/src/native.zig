@@ -1,11 +1,11 @@
 const std = @import("std");
 const regex = @import("regex.zig");
+const counter = @import("counter.zig");
 
 pub const Star = extern struct { x: f32, y: f32, speed: f32 };
 pub const Random = *const fn (?*anyopaque) callconv(.c) f32;
 
-// The original C square has undefined behavior on signed overflow. Report
-// that case without modifying the output rather than silently wrapping.
+// Original C signed overflow is undefined. Report it without changing output.
 export fn drbz_square(value: c_int, out: *c_int) c_int {
     const result = @mulWithOverflow(value, value);
     if (result[1] != 0) return 1;
@@ -13,8 +13,8 @@ export fn drbz_square(value: c_int, out: *c_int) c_int {
     return 0;
 }
 
-// Identical input/output is supported; partial overlap is not. Validate all
-// inputs before publishing any output, including on the vectorized path.
+// Exact in-place operation is supported; partial overlap is not. Validate
+// every input before publishing any output, including on the SIMD path.
 export fn drbz_squares(input: [*c]const i32, output: [*c]i32, len: usize) c_int {
     if (len == 0) return 0;
     for (input[0..len]) |value| {
@@ -30,8 +30,7 @@ export fn drbz_squares(input: [*c]const i32, output: [*c]i32, len: usize) c_int 
     return 0;
 }
 
-// Preserve the C adder's left-to-right IEEE-754 evaluation. Reassociation
-// would change answers for cancellation and is not an implicit optimization.
+// Preserve left-to-right IEEE-754 evaluation, including cancellation.
 export fn drbz_sum_ordered(accumulator: f64, values: [*c]const f64, len: usize) f64 {
     @setFloatMode(.strict);
     if (len == 0) return accumulator;
@@ -39,6 +38,8 @@ export fn drbz_sum_ordered(accumulator: f64, values: [*c]const f64, len: usize) 
     for (values[0..len]) |value| sum += value;
     return sum;
 }
+
+// An explicitly measured candidate, not a presumed improvement.
 export fn drbz_sum_unrolled(accumulator: f64, values: [*c]const f64, len: usize) f64 {
     @setFloatMode(.strict);
     if (len == 0) return accumulator;
@@ -63,8 +64,7 @@ export fn drbz_stars_scalar(stars: [*c]Star, len: usize, random: Random, context
     }
 }
 
-// Caller-owned SoA storage is reused every tick. Preserve the original RNG
-// order (star order, x before y); no-wrap blocks make no callbacks.
+// Reuse caller-owned SoA storage. Preserve RNG order: star order, x before y.
 export fn drbz_stars_soa(x: [*c]f32, y: [*c]f32, speed: [*c]const f32, len: usize, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
     if (len == 0) return;
@@ -102,36 +102,13 @@ export fn drbz_count_scalar(bytes: [*c]const u8, len: usize) usize {
     for (bytes[0..len]) |byte| total += @intFromBool(byte == '\n');
     return total;
 }
-
-// Amortize reductions across up to 255 vector loads. Widen before reducing:
-// each u8 lane can hold 255 hits, but their sum needs more than eight bits.
 export fn drbz_count_blocked(bytes: [*c]const u8, len: usize) usize {
-    if (len == 0) return 0;
-    const V = @Vector(32, u8);
-    const newline: V = @splat('\n');
-    const one: V = @splat(1);
-    const zero: V = @splat(0);
-    var total: usize = 0;
-    var i: usize = 0;
-    while (len - i >= 32) {
-        const blocks = @min((len - i) / 32, 255);
-        var counts: V = @splat(0);
-        for (0..blocks) |_| {
-            const value: V = bytes[i..][0..32].*;
-            counts += @select(u8, value == newline, one, zero);
-            i += 32;
-        }
-        const wide: @Vector(32, u16) = @intCast(counts);
-        total += @reduce(.Add, wide);
-    }
-    for (bytes[i..len]) |byte| total += @intFromBool(byte == '\n');
-    return total;
+    return if (len == 0) 0 else counter.count(bytes[0..len]);
 }
 
 pub const Scanner = extern struct { position: i32, increment: i32, previous: i32, pixels: [100]u32 };
 
-// This scanner owns its persistent pixels. Callers may read them until the
-// next frame but must not modify them between frames.
+// The persistent pixels are borrowed for reading, not modification.
 export fn drbz_scanner_reset(state: *Scanner) void {
     state.* = .{ .position = 0, .increment = 1, .previous = -1, .pixels = @splat(0xff000000) };
 }
