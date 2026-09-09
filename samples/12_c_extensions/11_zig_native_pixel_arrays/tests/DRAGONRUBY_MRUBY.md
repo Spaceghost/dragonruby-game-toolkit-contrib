@@ -45,10 +45,12 @@ explicitly isolated test contract. No second VM is linked into the extension.
 
 ## Reproduce on Linux
 
-Use a fresh checkout or disposable worktree; the following applies a patch to
-it. From this sample's directory, set absolute paths:
+Use a fresh checkout or disposable worktree; this applies a patch to it.
+From this sample's directory, run the following as a shell script after
+setting absolute paths:
 
 ```sh
+set -eu
 export MRUBY_ROOT=/absolute/path/to/fresh-mruby-checkout
 export PATCH=/absolute/path/to/contrib/docs/dragonruby-mruby.patch
 
@@ -68,7 +70,7 @@ for mode in Debug ReleaseSafe; do
 done
 ```
 
-Use `set -eu` in a script so failed checks stop execution. Use separate clean
-build directories for different boxing configurations. The production SDK
-command remains `python3 tools/sdk_smoke.py --sdk /path/to/dragonruby`; this
-published-source target does not replace that real-engine validation.
+Use separate clean build directories for different boxing configurations.
+The production SDK command remains
+`python3 tools/sdk_smoke.py --sdk /path/to/dragonruby`; this published-source
+target does not replace that real-engine validation.
