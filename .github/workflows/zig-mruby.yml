@@ -5,10 +5,14 @@ on:
     branches: [main]
     paths:
       - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - docs/dragonruby-mruby.patch
+      - docs/dragonruby-mruby.patch.readme.txt
       - .github/workflows/zig-mruby.yml
   pull_request:
     paths:
       - samples/12_c_extensions/11_zig_native_pixel_arrays/**
+      - docs/dragonruby-mruby.patch
+      - docs/dragonruby-mruby.patch.readme.txt
       - .github/workflows/zig-mruby.yml
   workflow_dispatch:
 
@@ -20,15 +24,23 @@ concurrency:
 
 jobs:
   bridge:
-    name: Real mruby (${{ matrix.boxing }})
+    name: Real mruby (${{ matrix.flavor }}, ${{ matrix.boxing }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        flavor: [upstream-3.4, dragonruby-3.0]
         boxing: [word, nan, none]
+        include:
+          - flavor: upstream-3.4
+            revision: a309524d0bc90eef077a24634db2495a6f68e318 # mruby 3.4.0
+          - flavor: dragonruby-3.0
+            revision: 0f45836b5954accf508f333f932741b925214471 # mruby 3.0.0
     env:
       MRUBY_BOXING: ${{ matrix.boxing }}
+      MRUBY_FLAVOR: ${{ matrix.flavor }}
+      MRUBY_REVISION: ${{ matrix.revision }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,10 +48,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mruby/mruby
-          ref: a309524d0bc90eef077a24634db2495a6f68e318 # 3.4.0, test host only
+          ref: ${{ matrix.revision }}
           path: .ci-mruby
           submodules: recursive
           persist-credentials: false
+      - name: Verify source and apply the pinned published patch
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci-mruby rev-parse HEAD)" = "$MRUBY_REVISION"
+          test -z "$(git -C .ci-mruby status --porcelain --untracked-files=all)"
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then
+            patch="$GITHUB_WORKSPACE/docs/dragonruby-mruby.patch"
+            # Pin the Git blob as well as the upstream commit. Never rebase,
+            # partially apply, rewrite or silently skip the published patch.
+            expected=bd85545b27f4c6397da251ca05ead018cecb9818
+            actual=$(git hash-object "$patch")
+            if [ "$actual" != "$expected" ]; then
+              echo "Published patch changed: expected $expected, got $actual" >&2
+              exit 1
+            fi
+            git -C .ci-mruby apply --check --index "$patch"
+            git -C .ci-mruby apply --index "$patch"
+            git -C .ci-mruby diff --exit-code
+            git -C .ci-mruby diff --cached --stat
+            echo "Applied published patch blob $actual to $MRUBY_REVISION"
+          fi
       - name: Install checksum-pinned Zig
         shell: bash
         run: |
@@ -49,35 +84,53 @@ jobs:
           tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
       - name: Build the real mruby host
+        id: vm
         shell: bash
         run: |
           export MRUBY_CONFIG="$GITHUB_WORKSPACE/samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb"
           cd .ci-mruby
           if rake -j2 > "$RUNNER_TEMP/mruby-build.log" 2>&1; then
-            echo 'mruby build passed'
+            echo "mruby build passed: $MRUBY_FLAVOR / $MRUBY_BOXING"
           else
             result=$?
-            tail -n 40 "$RUNNER_TEMP/mruby-build.log"
+            tail -n 60 "$RUNNER_TEMP/mruby-build.log"
             exit "$result"
           fi
       - name: Load and exercise the actual bridge and Zig library
+        id: integration
         working-directory: samples/12_c_extensions/11_zig_native_pixel_arrays
         shell: bash
         run: |
+          set -euo pipefail
+          published=false
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
+          ruby -c tests/dragonruby_mruby.rb
           for mode in Debug ReleaseSafe; do
             if zig build mruby-test -Doptimize="$mode" -Dcpu=baseline \
-              -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dmruby-boxing="$MRUBY_BOXING" --summary all \
+              -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dmruby-boxing="$MRUBY_BOXING" \
+              -Dmruby-dragonruby="$published" --summary all \
               > "$RUNNER_TEMP/mruby-$mode.log" 2>&1; then
-              tail -n 15 "$RUNNER_TEMP/mruby-$mode.log"
+              tail -n 20 "$RUNNER_TEMP/mruby-$mode.log"
             else
               result=$?
-              tail -n 50 "$RUNNER_TEMP/mruby-$mode.log"
+              tail -n 70 "$RUNNER_TEMP/mruby-$mode.log"
               exit "$result"
             fi
           done
-      - name: Record scope
+      - name: Record scope and actual outcomes
         if: always()
         shell: bash
+        env:
+          SOURCE_RESULT: ${{ steps.source.outcome }}
+          VM_RESULT: ${{ steps.vm.outcome }}
+          INTEGRATION_RESULT: ${{ steps.integration.outcome }}
         run: |
-          echo 'Real mruby exercises the shared Ruby smoke suite through app/bridge.c and Zig; consult job results for pass/fail.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'The host table/upload sink is a test contract, NOT DragonRuby SDK ABI or GPU validation.' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## $MRUBY_FLAVOR / $MRUBY_BOXING"
+            echo "- Base commit: $MRUBY_REVISION"
+            echo "- Source verification/application: $SOURCE_RESULT"
+            echo "- VM build: $VM_RESULT"
+            echo "- Debug and ReleaseSafe bridge execution: $INTEGRATION_RESULT"
+            echo '- The published-patch target checks patched state fields and division semantics inside the loaded test host.'
+            echo '- The host table/upload sink is a test contract, NOT the DragonRuby SDK ABI or renderer.'
+          } >> "$GITHUB_STEP_SUMMARY"

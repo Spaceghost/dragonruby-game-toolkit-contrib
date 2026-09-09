@@ -34,7 +34,11 @@ static void check_frame(mrb_state *mrb, int row) {
 }
 
 int main(int argc, char **argv) {
+#ifdef DRB_ZIG_PUBLISHED_MRUBY
+    assert(argc == 4); /* The patch-specific Ruby probe is mandatory. */
+#else
     assert(argc == 3);
+#endif
     void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!lib) { fprintf(stderr, "%s\n", dlerror()); return 1; }
     typedef void (*register_fn)(mrb_state *, drb_api_t *);
@@ -47,13 +51,21 @@ int main(int argc, char **argv) {
     for (int cycle = 0; cycle < 3; ++cycle) {
         mrb_state *mrb = mrb_open();
         assert(mrb);
+#ifdef DRB_ZIG_PUBLISHED_MRUBY
+        /* These fields do not exist in stock mruby 3.0.0. Check both the
+           patched header layout and initialization by the running VM. */
+        assert(mrb->sym_default == mrb_intern_lit(mrb, "default"));
+        assert(mrb->sym_initialize == mrb_intern_lit(mrb, "initialize"));
+#endif
         mrb_define_module(mrb, "FFI");
         register_extension(mrb, &api);
-        FILE *script = fopen(argv[2], "rb");
-        assert(script);
-        mrb_load_file(mrb, script);
-        fclose(script);
-        if (mrb->exc) { mrb_print_error(mrb); return 1; }
+        for (int file = 2; file < argc; ++file) {
+            FILE *script = fopen(argv[file], "rb");
+            assert(script);
+            mrb_load_file(mrb, script);
+            fclose(script);
+            if (mrb->exc) { mrb_print_error(mrb); return 1; }
+        }
 
         evaluate(mrb, "FFI::CExt.reset_scanner");
         int row = 0, increment = 1;

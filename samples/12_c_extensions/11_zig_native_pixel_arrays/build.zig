@@ -100,8 +100,9 @@ pub fn build(b: *std.Build) void {
     check.dependOn(&shared.step);
 
     // Opt-in real mruby integration. This fixture is NEVER on production paths.
-    if (b.option([]const u8, "mruby-root", "Built upstream mruby test checkout")) |mruby| {
+    if (b.option([]const u8, "mruby-root", "Built mruby test checkout")) |mruby| {
         const boxing = b.option(enum { word, nan, none }, "mruby-boxing", "Test VM boxing configuration") orelse .word;
+        const published = b.option(bool, "mruby-dragonruby", "Require the published DragonRuby mruby 3.0.0 patch") orelse false;
         const flags: []const []const u8 = &.{
             "-std=c11",
             "-Wall",
@@ -110,6 +111,7 @@ pub fn build(b: *std.Build) void {
             "-UNDEBUG",
             "-DDRB_ZIG_TEST_HOST",
             "-DMRB_NO_PRESYM",
+            if (published) "-DDRB_ZIG_PUBLISHED_MRUBY" else "-DDRB_ZIG_UPSTREAM_MRUBY",
             switch (boxing) {
                 .word => "-DMRB_WORD_BOXING",
                 .nan => "-DMRB_NAN_BOXING",
@@ -146,6 +148,7 @@ pub fn build(b: *std.Build) void {
         const run_host = b.addRunArtifact(host);
         run_host.addArtifactArg(test_extension);
         run_host.addFileArg(b.path("tests/smoke.rb"));
+        if (published) run_host.addFileArg(b.path("tests/dragonruby_mruby.rb"));
         b.step("mruby-test", "Execute Ruby through the dynamic C/Zig adapter (not the SDK)").dependOn(&run_host.step);
     }
 
