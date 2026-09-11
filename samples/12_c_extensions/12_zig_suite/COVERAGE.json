@@ -1,10 +1,10 @@
 {
   "base_commit": "de2b581f4d2d62759785bd359c72a8e724648638",
-  "scope": "Every tracked native source/header is accounted for. Retained platform adapters, binding code and independent C test oracles are not claimed as Zig ports.",
+  "scope": "Every tracked native C-family source/header is accounted for. Retained platform adapters, binding code and independent C test oracles are not claimed as language ports merely because portable kernels now have Zig/Odin peers.",
   "groups": [
     {
       "root": "samples/12_c_extensions/01_basics/",
-      "role": "Original square and binding retained; checked scalar/batch arithmetic ported",
+      "role": "Original square/binding retained; checked scalar/batch arithmetic has Zig and Odin native peers",
       "zig": ["src/native.zig"],
       "files": {
         "app/ext.c": "a0879197d57a50d50ea8a7838e2771f826dc0210",
@@ -13,7 +13,7 @@
     },
     {
       "root": "samples/12_c_extensions/02_intermediate/",
-      "role": "Original tiny-regex implementation and bindings retained; dialect ported and differentially tested",
+      "role": "Original tiny-regex implementation/bindings retained; tiny-regex dialect is ported/tested in Zig only and is not being expanded into a persistent-regex project",
       "zig": ["src/regex.zig"],
       "files": {
         "app/re.c": "2d64d9f3e941af2a670a4176615f71173a33fb92",
@@ -24,7 +24,7 @@
     },
     {
       "root": "samples/12_c_extensions/03_native_pixel_arrays/",
-      "role": "Original scanner and binding retained; existing faithful Zig and new dirty-row candidate",
+      "role": "Original scanner/binding retained; Zig and Odin scanner state kernels have differential peers",
       "zig": ["src/native.zig"],
       "files": {
         "app/ext.c": "e8f5458c41034dfdf38f75163a277ef015fae125",
@@ -33,13 +33,13 @@
     },
     {
       "root": "samples/12_c_extensions/04_handcrafted_extension/",
-      "role": "Nested Adder traversal ported with bounded depth, cycle rejection, ordered arithmetic and batched adapter decoding",
+      "role": "Nested Adder traversal has Zig and Odin single/batched host-reader implementations with fixed depth, cycles/errors and ordered arithmetic tested",
       "zig": ["src/apps.zig"],
       "files": { "app/extension.c": "88608d37945ecbbe5e5789c6f48a9764dee51e32" }
     },
     {
       "root": "samples/12_c_extensions/04_handcrafted_extension_advanced/",
-      "role": "Star motion ported and measured; one-object Ruby draw adapter implemented, proprietary renderer validation still pending",
+      "role": "Star motion has matched C/Zig/Odin competitors; Zig/Odin also have persistent caller-owned starfields and the Ruby sample uses one native starfield object",
       "zig": ["src/native.zig", "src/starfield.zig"],
       "files": { "native/ext-bindings.c": "5ec7bdd410407632343ac8024ee7f23cba4d2222" }
     },
@@ -54,7 +54,7 @@
     },
     {
       "root": "samples/12_c_extensions/06_handcrafted_mac_extension/",
-      "role": "Greeting formatting ported; original Foundation classes and SDK registration retained, real macOS engine validation pending",
+      "role": "Greeting formatting has Zig/Odin caller-buffer kernels; Foundation classes and SDK registration remain platform boundaries",
       "zig": ["src/apps.zig"],
       "files": {
         "app-native/bye.h": "f01fe038f1b786b03b59e733c654fad7934f41f9",
@@ -84,13 +84,13 @@
     },
     {
       "root": "samples/12_c_extensions/09_handcrafted_threads/",
-      "role": "Worker ownership and atomic lifecycle ported; real pthread tests, original SDL/Ruby registration retained",
+      "role": "Worker ownership/atomics have Zig and Odin portable implementations; real SDL/Ruby adapter remains pending",
       "zig": ["src/apps.zig"],
       "files": { "app-native/ext.c": "c5dc357f8885abd5133bf0b2b4eb5ff2542acab7" }
     },
     {
       "root": "samples/12_c_extensions/10_sqlite3/",
-      "role": "Direct statement ownership plus cached query_json core/real-mruby adapter implemented and measured; upstream SQLite remains the engine",
+      "role": "Connection/statement ownership and cached packed query output are measured across C/Zig/Odin; Ruby result construction is shared host-adapter work",
       "zig": ["sqlite/sqlite.zig", "sqlite/query.zig"],
       "files": {
         "app-native/ext.c": "4c949cf5e403920e4fc7e2e081b5b500adedf4dc",
@@ -127,18 +127,21 @@
     }
   ],
   "suite_native_files": {
-    "src/native.h": "Public native-kernel C ABI",
-    "src/apps.h": "Public traversal, formatting and worker C ABI",
+    "src/native.h": "Public shared native-kernel C ABI, including Odin peer declarations",
+    "src/apps.h": "Public traversal, formatting and worker C ABI, including Odin peers",
     "tests/controls.c": "Independent scalar C controls, not original repository implementations",
     "tests/parity.c": "Differential and protected-memory test oracle",
     "tests/bench.c": "Native timing harness with observable checksums",
-    "tests/apps.c": "C ABI and real pthread lifecycle tests",
+    "tests/apps.c": "Shared traversal/greeting/pthread lifecycle tests, compiled for Zig and Odin symbols",
     "sqlite/sqlite.h": "SQLite wrapper C ABI",
+    "sqlite/query.h": "Shared C/Zig/Odin cached packed-query ABI",
     "sqlite/test.c": "Real SQLite error tests and lifecycle benchmark",
-    "bridge/bridge.c": "SDK-specific Ruby adapter; no native algorithms",
+    "bridge/bridge.c": "Shared SDK-specific Ruby adapter; no native algorithms",
     "bridge/host.c": "Real-mruby test executable; not a game engine",
     "bridge/support/dragonruby.h": "Explicitly isolated test-only API contract, not the proprietary ABI",
-    "competition/lf_sweep.c": "Exhaustive short-input newline microkernel timing/correctness harness",
+    "competition/bench.c": "Matched C/Zig/Odin runtime/allocation harness",
+    "competition/lf_sweep.c": "Exhaustive short newline sweep for C/Zig/Odin",
+    "competition/odin_native_check.c": "Independent C parity checks for Odin portable native ABI",
     "evidence/regex_long.c": "Long-input and protected-page C differential oracle; binary extension compares Zig variants only",
     "evidence/allocations.c": "Calibrated Linux allocator-reference interception and observable native-kernel assertions"
   }
