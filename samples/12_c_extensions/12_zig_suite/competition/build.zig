@@ -43,7 +43,20 @@ pub fn build(b: *std.Build) void {
     tests.root_module.linkSystemLibrary("m", .{});
     const run = b.addRunArtifact(tests);
     run.has_side_effects = true;
-    b.step("test", "Compare C, Zig and Odin with independent/original oracles and guarded memory").dependOn(&run.step);
+    const test_step = b.step("test", "Compare C, Zig and Odin with independent/original oracles and guarded memory");
+    test_step.dependOn(&run.step);
+
+    const odin_native_obj = object(b, "odin-native-check-c", b.path("odin_native_check.c"), target, optimize, &flags);
+    const odin_native = b.addExecutable(.{ .name = "odin-native-check", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
+    odin_native.root_module.addObject(odin_native_obj);
+    odin_native.root_module.addObject(control);
+    odin_native.root_module.addObject(original);
+    odin_native.root_module.addObjectFile(odin);
+    odin_native.root_module.linkSystemLibrary("m", .{});
+    const odin_native_run = b.addRunArtifact(odin_native);
+    odin_native_run.has_side_effects = true;
+    test_step.dependOn(&odin_native_run.step);
+
     const installed_tests = b.addInstallArtifact(tests, .{});
     b.step("build-tests", "Compile the test executable for source mutation checks").dependOn(&installed_tests.step);
 
