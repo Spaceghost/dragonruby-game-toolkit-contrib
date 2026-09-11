@@ -17,8 +17,11 @@ implementations of two shared ideas:
 * Star motion uses eight-lane SoA arithmetic when no star wraps. Dense blocks
   where all eight lanes wrap both axes enter one ordered scalar run instead of
   paying a vector check plus one fallback call for every eight stars. Mixed
-  blocks use a compact scalar fallback. Star order and x-before-y RNG calls are
-  preserved and every fallback cost remains inside the measurement.
+  blocks keep the already-computed vector `nx/ny`, publish those results once,
+  and repair only coordinates that actually wrapped. Zig turns the two vector
+  masks into compact 8-bit masks and visits wrapped stars in ascending order;
+  C receives the same sparse-repair idea with an ordinary ordered lane loop.
+  Star order and x-before-y RNG calls are preserved.
 
 The C candidate uses **Clang vector extensions**, not ISO-only C and not a claim
 about GCC. Both are compiled by the pinned Zig 0.16.0 distribution (bundled Clang
@@ -31,14 +34,15 @@ New candidates are available through `competitive.h` or by importing
 `drbz_stars_scalar_fallback`: a real low-level scalar ABI entry. That boundary is
 intentional. On ARM, keeping the fallback internal let LLVM specialize the
 frequent count=8 call sites into an eight-copy callback-heavy loop. External
-visibility prevents that code-size explosion while leaving the source ordinary.
-It is also a useful direct fallback for embeddings that require the same RNG
-ordering. This is not an automatic replacement for every workload.
+visibility prevents that particular code-size explosion while leaving the source
+ordinary. It is also a useful direct fallback for embeddings that require the
+same RNG ordering.
 
 Float slices must have equal lengths; distinct arrays must not overlap. The RNG
-must use its own state, not mutate the arrays or raise/reenter Ruby. Binary LF
-counting supports arbitrary bytes, including NUL. NULL is accepted only for an
-empty C range.
+must use its own state, not mutate the arrays or raise/reenter Ruby. That callback
+contract is what makes it valid for mixed blocks to publish clean vector results
+before repairing wrapped coordinates. Binary LF counting supports arbitrary
+bytes, including NUL. NULL is accepted only for an empty C range.
 
 ## Fair comparisons
 
@@ -67,52 +71,63 @@ byte-lane accumulation overflow and wrong star direction, in each language) must
 compile and fail the unchanged harness with the intended diagnostic. These are
 finite tests, not formal proof.
 
-## Dense-wrap fix and ARM code-size result
+## Wrap-density fixes and machine-code results
 
-The original tuned path detected wrapping vectorially and then called a scalar
-helper for each exceptional eight-star block. In the all-wrap case, every block
-therefore paid vector work plus fallback overhead before doing the required RNG
-work. The current implementation recognizes an all-eight, both-axes wrap mask
-and continues as one ordered dense scalar run until that condition ends.
+The first tuned star path detected wrapping vectorially and then called a scalar
+helper for each exceptional eight-star block. That created two separate problems:
 
-That removes the former all-wrap regression in the measured ARM workload: the
-current tuned Zig result is effectively tied with previous Zig, while tuned C is
-about 6% faster than original C in the same run. No-wrap remains a clear win for
-the tuned paths. Mixed-wrap remains a visible weakness: current tuned Zig is
-roughly 8% slower than previous Zig on the ARM run, so it is not silently promoted
-as a universal replacement.
+1. all-wrap paid vector work plus one fallback call for every eight stars;
+2. mixed-wrap threw away already-computed vector results and repeated scalar
+   additions/comparisons inside the fallback.
 
-The ARM code-size problem had a separate cause. Disassembly showed Zig's internal
-scalar helper at roughly 1 KiB versus about 224 bytes for C because LLVM unrolled
-and specialized the callback-heavy loop around its count=8 call sites. Merely
-changing slices to pointer+count and marking the helper cold did not stop it.
-Making the scalar fallback an ordinary exported ABI function did.
+The dense-wrap path now recognizes an all-eight, both-axes wrap mask and continues
+as one ordered scalar run until that condition ends. The mixed path now stores
+its vector results once and performs RNG repair only for coordinates that wrapped.
+This removes both regressions without changing the tested RNG sequence.
 
-Current ReleaseFast host-native symbol totals for star motion, counting each
-unique entry/helper exactly once:
+### Current star timings
 
-| Target | C | Zig | Zig/C |
+Latest matched run: source `51b7d207e6fe16687411d26564d479f0d1c6e049`,
+tested merge `5d39f669f62f0597f33d96752a6a3aa674c9ef42`, Zig 0.16.0
+ReleaseFast, host-native target, 3 fresh processes x 11 interleaved trials.
+Absolute values are shared-runner observations; compare variants within a row/run.
+
+| Target / workload | C tuned | Zig previous | Zig tuned | Tuned result |
+| --- | ---: | ---: | ---: | --- |
+| ARM64 / 16,384 no-wrap | **6.010 us** | 7.071 us | 6.048 us | C/Zig within ~1% |
+| ARM64 / 16,384 mixed-wrap | 12.063 us | 13.797 us | **10.986 us** | Zig tuned ~9% faster than C, ~20% faster than previous Zig |
+| ARM64 / 4,096 all-wrap | **16.925 us** | 17.245 us | 17.096 us | all three close; old tuned regression gone |
+| x86-64 / 16,384 no-wrap | 3.573 us | 3.848 us | **3.480 us** | Zig tuned ~3% faster than C |
+| x86-64 / 16,384 mixed-wrap | 15.848 us | 14.277 us | **10.482 us** | Zig tuned ~34% faster than C, ~27% faster than previous Zig |
+| x86-64 / 4,096 all-wrap | 26.341 us | **26.299 us** | 26.337 us | effectively tied |
+
+The former statement that mixed-wrap was an ~8% Zig regression is therefore
+historical, not current. The sparse repair reversed it on both measured native
+hosts. C also improved materially on ARM mixed-wrap after receiving the same
+algorithmic idea: from roughly 14.8 us in the preceding run to 12.1 us here.
+Different shared-runner hosts can change absolute timings, so causal claims use
+current within-run controls and the direction is additionally checked on x86.
+
+### Current star code size
+
+Sparse repair costs code, so size remains part of the competition instead of
+being ignored after the timing win. Current unique ReleaseFast star-motion code,
+counting the entry and each helper exactly once:
+
+| Target | C | Zig | Difference |
 | --- | ---: | ---: | ---: |
-| x86-64 | 676 B | **664 B** | 0.98x |
-| ARM64 | **800 B** | 836 B | 1.05x |
+| x86-64 | 863 B | **858 B** | Zig 5 B smaller |
+| ARM64 | 1,420 B | **1,064 B** | Zig 356 B smaller |
 
-The earlier ARM result was **604 B C versus 1,388 B Zig** before the dense helper
-was added and before the specialization fix. The current comparison includes the
-new dense helper in both languages, so the more relevant result is 800 B versus
-836 B. We did not use assembly, fake volatility, manually duplicated loops or an
-ISA-specific implementation to get there.
+Before sparse repair, the external-fallback change had reduced ARM Zig from the
+pathological 1,388 B result to 836 B. Sparse mixed repair deliberately spends
+another 228 B to remove the mixed-wrap call/recomputation tax, while still ending
+well below the earlier 1,388 B result. C's straightforward ordered repair loop is
+more aggressively expanded by Clang on this ARM target, so C currently pays a
+larger size cost. That is recorded rather than massaged away.
 
-Representative current ARM timings from the same implementation family:
-
-| Workload | C tuned | Zig tuned | Note |
-| --- | ---: | ---: | --- |
-| 16,384 no-wrap stars | 6.23 us | **5.98 us** | Zig ~4% faster |
-| 16,384 mixed-wrap stars | **14.85 us** | 14.92 us | essentially tied C/Zig; previous Zig remains faster |
-| 4,096 all-wrap stars | 17.26 us | 17.30 us | effectively tied; regression removed |
-
-These are shared-runner observations, not portable equivalence claims. Exact
-paired ratios, MAD, ranges, every sample and disassembly are retained in the CI
-artifacts.
+We did not use assembly, fake volatility, manually duplicated eight-lane source,
+ISA-specific intrinsics, fast math or LTO to obtain these results.
 
 ## Reproduce
 
@@ -144,10 +159,12 @@ https://ziglang.org/documentation/0.16.0/#Vectors
 ## Optimization history
 
 The first candidates are retained in Git at `8c2488a`. `f71e7be` added bounded
-vector tails and outlined exceptional star work. A later density-aware pass
-removed the large all-wrap fallback-call tax. Inspection of the ARM artifact then
-showed that the remaining 1,388-byte Zig star body was overwhelmingly one
-compiler-unrolled scalar helper. A truthful `@branchHint(.cold)` did not change
-its machine code and was removed. The current exported scalar fallback blocks
-that internal specialization and reduces the ARM Zig star implementation to
-within 36 bytes of C while preserving the same tests and measured behavior.
+vector tails and outlined exceptional star work. A density-aware pass removed
+the large all-wrap fallback-call tax. Inspection of the ARM artifact then showed
+that the remaining 1,388-byte Zig star body was overwhelmingly one compiler-
+unrolled scalar helper. A truthful `@branchHint(.cold)` did not change its
+machine code and was removed. Exporting the scalar fallback stopped that internal
+count=8 specialization. Finally, `3595932` replaced mixed-block fallback calls
+with Zig's mask-driven sparse repair, and `51b7d20` gave C the same sparse-repair
+algorithmic opportunity. The current measurements above are from that matched
+C/Zig revision.
