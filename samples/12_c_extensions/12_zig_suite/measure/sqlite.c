@@ -11,7 +11,7 @@ drbz_query_result drbc_query_pack(drbz_query_cache *, const unsigned char *, siz
 drbz_query_result drbc_query_pack_each(drbz_query_cache *, const unsigned char *, size_t);
 static drbz_database database;
 static uint32_t parameter_seed;
-static drbz_query_cache query_each, query_c, query_zig;
+static drbz_query_cache query_each, query_c, query_zig, query_odin;
 static int query_ready;
 #ifdef DRBZ_PROFILE
 static sqlite3_mem_methods underlying;
@@ -68,19 +68,27 @@ static uint64_t packed_checksum(const drbz_query_cache *cache) {
 }
 static void clear_query_caches(void) {
     if(!query_ready) return;
-    assert(drbc_query_cache_clear(&query_each)==SQLITE_OK); assert(drbc_query_cache_clear(&query_c)==SQLITE_OK); assert(drbz_query_cache_clear(&query_zig)==SQLITE_OK);
+    assert(drbc_query_cache_clear(&query_each)==SQLITE_OK);
+    assert(drbc_query_cache_clear(&query_c)==SQLITE_OK);
+    assert(drbz_query_cache_clear(&query_zig)==SQLITE_OK);
+    assert(drbo_query_cache_clear(&query_odin)==SQLITE_OK);
     query_ready=0;
 }
 static void warm_query_caches(const bench_case *c) {
     clear_query_caches();
-    drbc_query_cache_init(&query_each,database.handle); drbc_query_cache_init(&query_c,database.handle); drbz_query_cache_init(&query_zig,database.handle);
+    drbc_query_cache_init(&query_each,database.handle);
+    drbc_query_cache_init(&query_c,database.handle);
+    drbz_query_cache_init(&query_zig,database.handle);
+    drbo_query_cache_init(&query_odin,database.handle);
     const char *sql=query_sql(c->detail); size_t len=strlen(sql);
     drbz_query_result a=drbc_query_pack_each(&query_each,(const unsigned char *)sql,len);
     drbz_query_result b=drbc_query_pack(&query_c,(const unsigned char *)sql,len);
     drbz_query_result z=drbz_query_pack(&query_zig,(const unsigned char *)sql,len);
-    assert(a.code==SQLITE_OK&&b.code==SQLITE_OK&&z.code==SQLITE_OK);
-    assert(a.rows==b.rows&&a.rows==z.rows);
-    assert(packed_checksum(&query_each)==packed_checksum(&query_c)); assert(packed_checksum(&query_c)==packed_checksum(&query_zig));
+    drbz_query_result o=drbo_query_pack(&query_odin,(const unsigned char *)sql,len);
+    assert(a.code==SQLITE_OK&&b.code==SQLITE_OK&&z.code==SQLITE_OK&&o.code==SQLITE_OK);
+    assert(a.rows==b.rows&&a.rows==z.rows&&a.rows==o.rows);
+    uint64_t ah=packed_checksum(&query_each), bh=packed_checksum(&query_c), zh=packed_checksum(&query_zig), oh=packed_checksum(&query_odin);
+    assert(ah==bh&&bh==zh&&zh==oh);
     query_ready=1;
 }
 static void reset(const bench_case *c, uint32_t seed) {
@@ -89,9 +97,13 @@ static void reset(const bench_case *c, uint32_t seed) {
 }
 static uint64_t batch_query(const bench_case *c,unsigned variant,size_t n) {
     const char *sql=query_sql(c->detail); size_t len=strlen(sql); uint64_t checksum=0;
-    drbz_query_cache *cache=variant==0?&query_each:variant==1?&query_c:&query_zig;
+    drbz_query_cache *cache=variant==0?&query_each:variant==1?&query_c:variant==2?&query_zig:&query_odin;
     for(size_t i=0;i<n;++i){
-        drbz_query_result r=variant==0?drbc_query_pack_each(cache,(const unsigned char *)sql,len):variant==1?drbc_query_pack(cache,(const unsigned char *)sql,len):drbz_query_pack(cache,(const unsigned char *)sql,len);
+        drbz_query_result r;
+        if(variant==0) r=drbc_query_pack_each(cache,(const unsigned char *)sql,len);
+        else if(variant==1) r=drbc_query_pack(cache,(const unsigned char *)sql,len);
+        else if(variant==2) r=drbz_query_pack(cache,(const unsigned char *)sql,len);
+        else r=drbo_query_pack(cache,(const unsigned char *)sql,len);
         assert(r.code==SQLITE_OK); checksum^=packed_checksum(cache)+UINT64_C(0x9e3779b97f4a7c15)+(checksum<<6)+(checksum>>2);
     }
     return checksum;
@@ -151,9 +163,9 @@ int main(int argc,char **argv){
         {"sqlite/direct-reuse",{"c_direct","zig_direct","zig_wrapped"},3,1,0,1,reset,batch,NULL},
         {"sqlite/direct-rebind",{"c_direct","zig_direct"},2,1,0,2,reset,batch,NULL},
         {"sqlite/direct-prepare-each",{"c_direct","zig_direct"},2,1,0,3,reset,batch,NULL},
-        {"sqlite/query-json-1",{"c_prepare_each","c_cached","zig_cached"},3,1,2,10,reset,batch,NULL},
-        {"sqlite/query-json-64",{"c_prepare_each","c_cached","zig_cached"},3,64,2,11,reset,batch,NULL},
-        {"sqlite/query-json-1024",{"c_prepare_each","c_cached","zig_cached"},3,1024,2,12,reset,batch,NULL},
+        {"sqlite/query-json-1",{"c_prepare_each","c_cached","zig_cached","odin_cached"},4,1,2,10,reset,batch,NULL},
+        {"sqlite/query-json-64",{"c_prepare_each","c_cached","zig_cached","odin_cached"},4,64,2,11,reset,batch,NULL},
+        {"sqlite/query-json-1024",{"c_prepare_each","c_cached","zig_cached","odin_cached"},4,1024,2,12,reset,batch,NULL},
     };
     bench_run(cases,sizeof cases/sizeof *cases,"sqlite-xMalloc",0,argc,argv); clear_query_caches();
 #ifdef DRBZ_PROFILE
