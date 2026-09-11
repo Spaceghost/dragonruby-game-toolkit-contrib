@@ -43,6 +43,8 @@ int main(int argc, char **argv) {
         .mrb_class_get = mrb_class_get,
         .drb_float_value = float_value,
         .mrb_str_new = mrb_str_new,
+        .mrb_ary_new = mrb_ary_new,
+        .mrb_ary_push = mrb_ary_push,
     };
     for (int lifetime = 0; lifetime < 3; ++lifetime) {
         mrb_state *mrb = mrb_open();
@@ -63,6 +65,6 @@ int main(int argc, char **argv) {
     }
     assert(uploads == 120);
     dlclose(library);
-    printf("RUBY_SUITE_PROOF {\"vm_lifetimes\":3,\"registrations\":6,\"scanner_uploads\":%zu,\"dragonruby_engine_validated\":false}\n", uploads);
+    printf("RUBY_SUITE_PROOF {\"vm_lifetimes\":3,\"registrations\":6,\"scanner_uploads\":%zu,\"sqlite_query_cache\":true,\"dragonruby_engine_validated\":false}\n", uploads);
     return 0;
 }

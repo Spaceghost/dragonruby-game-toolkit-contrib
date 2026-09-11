@@ -30,3 +30,20 @@ checks.each do |call|
 end
 raise 'scanner reset' unless FFI::Zig.reset_scanner.nil?
 20.times { raise 'scanner return' unless FFI::Zig.update_scanner_texture.nil? }
+
+FFI::Zig.sqlite_open(':memory:')
+FFI::Zig.sqlite_exec("create table q(v text); insert into q values ('{\"id\":1}'), (NULL), ('a'||char(0)||'b')")
+sql = 'select v from q order by rowid'
+expected = ["{\"id\":1}", 'null', "a\0b"]
+raise 'query_json first result' unless FFI::Zig.query_json(sql) == expected
+raise 'query should prepare once' unless FFI::Zig.query_prepares == 1 && FFI::Zig.query_hits == 0
+raise 'query_json cached result' unless FFI::Zig.query_json(sql) == expected
+raise 'query should hit cache' unless FFI::Zig.query_prepares == 1 && FFI::Zig.query_hits == 1
+begin
+  FFI::Zig.query_json('select from bad_sql')
+  raise 'expected query error'
+rescue RuntimeError
+end
+raise 'failed prepare evicted cache' unless FFI::Zig.query_json(sql) == expected
+raise 'failed prepare changed counters' unless FFI::Zig.query_prepares == 1 && FFI::Zig.query_hits == 2
+FFI::Zig.sqlite_close

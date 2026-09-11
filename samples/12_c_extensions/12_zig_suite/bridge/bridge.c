@@ -1,18 +1,27 @@
-/* SDK-specific Ruby adapter. All raising/allocation stays on the C side of
- * the boundary, after native kernels have returned. The test host supplies
- * real mruby but not the proprietary DragonRuby API table or renderer. */
+/* SDK-specific Ruby adapter. Raising and mruby allocation happen on the C side
+ * after native kernels return. The test host supplies real mruby but not the
+ * proprietary DragonRuby API table or renderer. */
 #include <dragonruby.h>
 #include <mruby/array.h>
 #include "native.h"
 #include "apps.h"
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#ifdef DRBZ_SQLITE_QUERY
+#include <sqlite3.h>
+#include "query.h"
+#endif
 
 static drb_api_t *api;
 static drbz_scanner scanner;
 
 static void argument_error(mrb_state *mrb, const char *message) {
     api->mrb_raise(mrb, api->mrb_class_get(mrb, "ArgumentError"), message);
+}
+static void runtime_error(mrb_state *mrb, const char *message) {
+    api->mrb_raise(mrb, api->mrb_class_get(mrb, "RuntimeError"), message);
 }
 static mrb_value square_value(mrb_state *mrb, mrb_value self) {
     (void)self;
@@ -106,6 +115,121 @@ static mrb_value frame(mrb_state *mrb, mrb_value self) {
     api->drb_upload_pixel_array("zig_suite_scanner", 10, 10, pixels);
     return mrb_nil_value();
 }
+
+#ifdef DRBZ_SQLITE_QUERY
+static sqlite3 *query_db;
+static drbz_query_cache query_cache;
+static int query_cache_ready;
+
+static unsigned char *copy_c_string(mrb_state *mrb, const char *text, mrb_int length, const char *what) {
+    if (length < 0 || memchr(text, 0, (size_t)length) != NULL) {
+        char message[160];
+        snprintf(message, sizeof message, "%s contains an embedded NUL", what);
+        argument_error(mrb, message);
+        return NULL;
+    }
+    if ((uint64_t)length >= UINT64_MAX) {
+        argument_error(mrb, "string is too large for SQLite");
+        return NULL;
+    }
+    unsigned char *copy = sqlite3_malloc64((sqlite3_uint64)length + 1);
+    if (!copy) {
+        runtime_error(mrb, "SQLite string allocation failed");
+        return NULL;
+    }
+    if (length) memcpy(copy, text, (size_t)length);
+    copy[length] = 0;
+    return copy;
+}
+static void raise_db_error(mrb_state *mrb, const char *prefix, sqlite3 *db) {
+    char message[512];
+    snprintf(message, sizeof message, "%s: %s", prefix, db ? sqlite3_errmsg(db) : "no database");
+    runtime_error(mrb, message);
+}
+static mrb_value sqlite_open_value(mrb_state *mrb, mrb_value self) {
+    (void)self;
+    char *path; mrb_int length;
+    api->mrb_get_args(mrb, "s", &path, &length);
+    unsigned char *copy = copy_c_string(mrb, path, length, "database path");
+    if (!copy) return mrb_nil_value();
+    sqlite3 *next = NULL;
+    int rc = sqlite3_open((const char *)copy, &next);
+    sqlite3_free(copy);
+    if (rc != SQLITE_OK) {
+        char message[512];
+        snprintf(message, sizeof message, "SQLite open failed: %s", next ? sqlite3_errmsg(next) : "allocation failure");
+        if (next) sqlite3_close(next);
+        runtime_error(mrb, message);
+        return mrb_nil_value();
+    }
+    if (query_db) {
+        int clear_rc = query_cache_ready ? drbz_query_cache_clear(&query_cache) : SQLITE_OK;
+        int close_rc = sqlite3_close(query_db);
+        query_db = NULL; query_cache_ready = 0;
+        if (clear_rc != SQLITE_OK || close_rc != SQLITE_OK) {
+            sqlite3_close(next);
+            runtime_error(mrb, "failed to close previous SQLite database");
+            return mrb_nil_value();
+        }
+    }
+    query_db = next;
+    drbz_query_cache_init(&query_cache, query_db);
+    query_cache_ready = 1;
+    return mrb_nil_value();
+}
+static mrb_value sqlite_exec_value(mrb_state *mrb, mrb_value self) {
+    (void)self;
+    if (!query_db) { runtime_error(mrb, "call sqlite_open before sqlite_exec"); return mrb_nil_value(); }
+    char *sql; mrb_int length;
+    api->mrb_get_args(mrb, "s", &sql, &length);
+    unsigned char *copy = copy_c_string(mrb, sql, length, "SQL");
+    if (!copy) return mrb_nil_value();
+    int rc = sqlite3_exec(query_db, (const char *)copy, NULL, NULL, NULL);
+    sqlite3_free(copy);
+    if (rc != SQLITE_OK) { raise_db_error(mrb, "SQLite exec failed", query_db); return mrb_nil_value(); }
+    return mrb_nil_value();
+}
+static mrb_value query_json_value(mrb_state *mrb, mrb_value self) {
+    (void)self;
+    if (!query_db || !query_cache_ready) { runtime_error(mrb, "call sqlite_open before query_json"); return mrb_nil_value(); }
+    char *sql; mrb_int length;
+    api->mrb_get_args(mrb, "s", &sql, &length);
+    if (length < 0) { argument_error(mrb, "negative SQL length"); return mrb_nil_value(); }
+    drbz_query_result result = drbz_query_pack(&query_cache, (const unsigned char *)sql, (size_t)length);
+    if (result.code != SQLITE_OK) { raise_db_error(mrb, "SQLite query failed", query_db); return mrb_nil_value(); }
+    const unsigned char *packed = NULL; size_t packed_length = 0, rows = 0;
+    drbz_query_output(&query_cache, &packed, &packed_length, &rows);
+    mrb_value array = api->mrb_ary_new(mrb);
+    size_t position = 0;
+    for (size_t row = 0; row < rows; ++row) {
+        if (packed_length - position < sizeof(uint64_t)) { runtime_error(mrb, "invalid packed query result"); return mrb_nil_value(); }
+        uint64_t row_length; memcpy(&row_length, packed + position, sizeof row_length); position += sizeof row_length;
+        mrb_value value;
+        if (row_length == UINT64_MAX) {
+            value = api->mrb_str_new(mrb, "null", 4);
+        } else {
+            if (row_length > (uint64_t)(packed_length - position) || row_length > (uint64_t)MRB_INT_MAX) { runtime_error(mrb, "invalid packed query row length"); return mrb_nil_value(); }
+            value = api->mrb_str_new(mrb, (const char *)(packed + position), (mrb_int)row_length);
+            position += (size_t)row_length;
+        }
+        api->mrb_ary_push(mrb, array, value);
+    }
+    if (position != packed_length) { runtime_error(mrb, "trailing packed query bytes"); return mrb_nil_value(); }
+    return array;
+}
+static mrb_value sqlite_close_value(mrb_state *mrb, mrb_value self) {
+    (void)self; api->mrb_get_args(mrb, "");
+    if (!query_db) return mrb_nil_value();
+    int clear_rc = query_cache_ready ? drbz_query_cache_clear(&query_cache) : SQLITE_OK;
+    int close_rc = sqlite3_close(query_db);
+    if (close_rc == SQLITE_OK) { query_db = NULL; query_cache_ready = 0; }
+    if (clear_rc != SQLITE_OK || close_rc != SQLITE_OK) { runtime_error(mrb, "SQLite close failed"); return mrb_nil_value(); }
+    return mrb_nil_value();
+}
+static mrb_value query_prepares_value(mrb_state *mrb, mrb_value self) { (void)self; api->mrb_get_args(mrb, ""); return mrb_fixnum_value((mrb_int)query_cache.prepares); }
+static mrb_value query_hits_value(mrb_state *mrb, mrb_value self) { (void)self; api->mrb_get_args(mrb, ""); return mrb_fixnum_value((mrb_int)query_cache.hits); }
+#endif
+
 DRB_FFI_EXPORT void drb_register_c_extensions(mrb_state *mrb, drb_api_t *host) {
     api = host;
     drbz_scanner_reset(&scanner);
@@ -119,4 +243,12 @@ DRB_FFI_EXPORT void drb_register_c_extensions(mrb_state *mrb, drb_api_t *host) {
     api->mrb_define_module_function(mrb, zig, "goodbye", goodbye, MRB_ARGS_REQ(1));
     api->mrb_define_module_function(mrb, zig, "reset_scanner", reset, MRB_ARGS_NONE());
     api->mrb_define_module_function(mrb, zig, "update_scanner_texture", frame, MRB_ARGS_NONE());
+#ifdef DRBZ_SQLITE_QUERY
+    api->mrb_define_module_function(mrb, zig, "sqlite_open", sqlite_open_value, MRB_ARGS_REQ(1));
+    api->mrb_define_module_function(mrb, zig, "sqlite_exec", sqlite_exec_value, MRB_ARGS_REQ(1));
+    api->mrb_define_module_function(mrb, zig, "query_json", query_json_value, MRB_ARGS_REQ(1));
+    api->mrb_define_module_function(mrb, zig, "sqlite_close", sqlite_close_value, MRB_ARGS_NONE());
+    api->mrb_define_module_function(mrb, zig, "query_prepares", query_prepares_value, MRB_ARGS_NONE());
+    api->mrb_define_module_function(mrb, zig, "query_hits", query_hits_value, MRB_ARGS_NONE());
+#endif
 }

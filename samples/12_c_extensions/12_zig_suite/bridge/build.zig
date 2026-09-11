@@ -8,11 +8,20 @@ pub fn build(b: *std.Build) void {
         .target = target, .optimize = optimize, .link_libc = true,
     }) });
     extension.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../src") });
+    extension.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../sqlite") });
+
+    const query = b.addLibrary(.{ .name = "zig_suite_query", .linkage = .static, .root_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = b.pathFromRoot("../sqlite/query.zig") },
+        .target = target, .optimize = optimize, .link_libc = true,
+    }) });
+    query.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../sqlite") });
+    query.root_module.linkSystemLibrary("sqlite3", .{});
+
     if (b.option([]const u8, "mruby-root", "Built test VM, not the DragonRuby SDK")) |mruby| {
         const boxing = b.option(enum { word, nan, none }, "boxing", "Matching test VM value layout") orelse .word;
         const published = b.option(bool, "published", "Verify the complete published DragonRuby mruby patch") orelse false;
         const flags: []const []const u8 = &.{
-            "-std=c11", "-Wall", "-Wextra", "-Werror", "-UNDEBUG", "-DDRBZ_SUITE_TEST_HOST", "-DMRB_NO_PRESYM",
+            "-std=c11", "-Wall", "-Wextra", "-Werror", "-UNDEBUG", "-DDRBZ_SUITE_TEST_HOST", "-DDRBZ_SQLITE_QUERY", "-DMRB_NO_PRESYM",
             if (published) "-DDRBZ_PUBLISHED_MRUBY" else "-DDRBZ_UPSTREAM_MRUBY",
             switch (boxing) { .word => "-DMRB_WORD_BOXING", .nan => "-DMRB_NAN_BOXING", .none => "-DMRB_NO_BOXING" },
             if (boxing == .nan) "-DMRB_INT32" else "-DMRB_INT64",
@@ -20,6 +29,8 @@ pub fn build(b: *std.Build) void {
         extension.root_module.addIncludePath(b.path("support"));
         extension.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ mruby, "include" }) });
         extension.root_module.addCSourceFile(.{ .file = b.path("bridge.c"), .flags = flags });
+        extension.root_module.linkLibrary(query);
+        extension.root_module.linkSystemLibrary("sqlite3", .{});
         const host = b.addExecutable(.{ .name = "drbz-ruby-suite", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
         host.rdynamic = true;
         host.root_module.addIncludePath(b.path("support"));
@@ -32,13 +43,20 @@ pub fn build(b: *std.Build) void {
         run.has_side_effects = true;
         run.addArtifactArg(extension);
         run.addFileArg(b.path("smoke.rb"));
-        const test_step = b.step("test", "Execute Ruby API calls, exceptions, GC and VM re-registration");
+        const test_step = b.step("test", "Execute Ruby API calls, cached SQLite rows, exceptions, GC and VM re-registration");
         test_step.dependOn(&run.step);
         b.default_step = test_step;
     } else if (b.option([]const u8, "sdk-include", "Directory containing the matching proprietary dragonruby.h and mruby headers")) |sdk| {
         // Deliberately no support/ include path in this production branch.
+        const sqlite_query = b.option(bool, "sqlite-query", "Enable cached query_json using system SQLite") orelse false;
         extension.root_module.addSystemIncludePath(.{ .cwd_relative = sdk });
-        extension.root_module.addCSourceFile(.{ .file = b.path("bridge.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra" } });
+        if (sqlite_query) {
+            extension.root_module.addCSourceFile(.{ .file = b.path("bridge.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-DDRBZ_SQLITE_QUERY" } });
+            extension.root_module.linkLibrary(query);
+            extension.root_module.linkSystemLibrary("sqlite3", .{});
+        } else {
+            extension.root_module.addCSourceFile(.{ .file = b.path("bridge.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra" } });
+        }
         if (target.result.os.tag == .macos) extension.linker_allow_shlib_undefined = true;
         b.installArtifact(extension);
     } else {
