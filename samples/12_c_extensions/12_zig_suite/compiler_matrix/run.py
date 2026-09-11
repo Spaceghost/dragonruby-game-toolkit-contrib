@@ -89,26 +89,45 @@ def main():
     missing=required-set(binaries)
     if missing: raise SystemExit(f"required compiler profiles failed: {sorted(missing)}")
 
+    # Calibrate all compiler/profile executables first, then use the largest
+    # required batch per workload for everyone. Timing/checksum comparisons are
+    # therefore equal-work, while no contender gets an undersized fast batch.
+    calibration_seed=0xD1CEB00C
+    calibration={}
+    for name,binary in binaries.items():
+        p=run([str(binary),str(ARGS.min_ns),str(calibration_seed)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        if p.returncode: raise SystemExit(f"calibration failed {name}: {p.stdout[-4000:]}")
+        calibration[name]=parse_rows(p.stdout)
+    plan=[]
+    for wi,workload in enumerate(WORKLOADS):
+        ns={rows[wi]["iterations"] for rows in calibration.values()}
+        chosen=max(ns)
+        if chosen <= 0: raise SystemExit(f"invalid calibration {workload}: {ns}")
+        plan.append(chosen)
+    meta["fixed_iterations"]={w:n for w,n in zip(WORKLOADS,plan)}
+    (out/"environment.json").write_text(json.dumps(meta,indent=2)+"\n")
+
     observations=[]; rng=random.Random(0x5A17CC)
+    fixed=[str(n) for n in plan]
     for process in range(3):
         for trial in range(11):
             names=list(binaries); rng.shuffle(names)
             seed=(0x9E3779B97F4A7C15 ^ (process<<40) ^ (trial<<8)) & ((1<<64)-1)
             trial_rows={}
             for order,name in enumerate(names):
-                p=run([str(binaries[name]),str(ARGS.min_ns),str(seed)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+                p=run([str(binaries[name]),"--fixed",str(seed),*fixed],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
                 if p.returncode: raise SystemExit(f"runtime failed {name}: {p.stdout[-4000:]}")
                 rows=parse_rows(p.stdout); trial_rows[name]=rows
-                for row in rows: observations.append({**row,"variant":name,"process":process,"trial":trial,"order":order,"seed":seed})
+                for wi,row in enumerate(rows):
+                    if row["iterations"] != plan[wi]: raise SystemExit(f"unequal work {name} {row}")
+                    observations.append({**row,"variant":name,"process":process,"trial":trial,"order":order,"seed":seed})
             for wi,workload in enumerate(WORKLOADS):
                 checks={rows[wi]["checksum"] for rows in trial_rows.values()}
                 if len(checks)!=1: raise SystemExit(f"checksum mismatch {workload} p{process} t{trial}: {checks}")
+            ref=trial_rows[next(iter(trial_rows))]; table={r["workload"]:r["checksum"] for r in ref}
             for suffix in ("no-wrap","mixed","all-wrap"):
-                ref=trial_rows[next(iter(trial_rows))]
-                table={r["workload"]:r["checksum"] for r in ref}
                 if table[f"stars/original/{suffix}"] != table[f"stars/tuned/{suffix}"]:
                     raise SystemExit(f"original/tuned star checksum mismatch: {suffix}")
-            ref=trial_rows[next(iter(trial_rows))]; table={r["workload"]:r["checksum"] for r in ref}
             for size in ("4k","1m"):
                 if table[f"count/scalar/{size}"] != table[f"count/tuned/{size}"]: raise SystemExit(f"count mismatch {size}")
     with (out/"raw.jsonl").open("w") as f:
@@ -117,7 +136,7 @@ def main():
     groups={}
     for row in observations: groups.setdefault((row["variant"],row["workload"]),[]).append(row["ns_per_op"])
     build_by={r["name"]:r for r in builds if r.get("supported")}
-    lines=["# C compiler/profile matrix","",f"CPU mode: `{ARGS.cpu}`. Same runner and identical C sources; compiler-specific flags select the same baseline/native target class and are retained verbatim in builds.json. Runtime medians use 33 interleaved observations per supported profile.","","| workload | variant | median ns/op | MAD | build median ms | text bytes |","| --- | --- | ---: | ---: | ---: | ---: |"]
+    lines=["# C compiler/profile matrix","",f"CPU mode: `{ARGS.cpu}`. Same runner and identical C sources; compiler-specific flags select the same baseline/native target class and are retained verbatim in builds.json. All compiler/profile variants use one fixed calibrated iteration count per workload. Runtime medians use 33 interleaved observations per supported profile.","","| workload | variant | median ns/op | MAD | build median ms | text bytes |","| --- | --- | ---: | ---: | ---: | ---: |"]
     summary=[]
     for workload in WORKLOADS:
         for variant in sorted(binaries):

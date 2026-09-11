@@ -119,6 +119,10 @@ test "persistent starfield packs one borrowed batch without allocation" {
     try std.testing.expect(needed <= storage.len);
     var field: Starfield = undefined;
     try std.testing.expectEqual(@as(c_int, 0), drbz_starfield_init(&storage, storage.len, count, 0x12345678, &field));
+    // Force one star to wrap both axes. No-wrap updates correctly consume no RNG.
+    field.x[0] = 1280.0;
+    field.y[0] = 720.0;
+    field.speed[0] = 1.0;
     const before = field.rng_state;
     var seen: usize = 0;
     drbz_starfield_frame(&field, testSink, &seen);

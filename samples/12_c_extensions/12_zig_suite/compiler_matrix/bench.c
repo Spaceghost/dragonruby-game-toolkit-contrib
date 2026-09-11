@@ -94,6 +94,17 @@ static uint64_t run_scanner(size_t n) { for(size_t i=0;i<n;++i) original_c_scann
 static uint64_t run_star_original(size_t n) { for(size_t i=0;i<n;++i) original_c_stars(aos,NSTARS,random_value,NULL); return star_checksum_aos(); }
 static uint64_t run_star_tuned(size_t n) { for(size_t i=0;i<n;++i) drbc_stars_block(xs,ys,speeds,NSTARS,random_value,NULL); return star_checksum_soa(); }
 
+static const workload workloads[]={
+    {"count/scalar/4k",prep0,run_count_scalar_4k},{"count/tuned/4k",prep0,run_count_tuned_4k},
+    {"count/scalar/1m",prep0,run_count_scalar_1m},{"count/tuned/1m",prep0,run_count_tuned_1m},
+    {"sum/ordered/65536",prep0,run_sum},{"regex/compile-search/4k",prep0,run_regex_compile},
+    {"regex/compiled-search/4k",prep0,run_regex_compiled},{"scanner/original",prep0,run_scanner},
+    {"stars/original/no-wrap",prep0,run_star_original},{"stars/tuned/no-wrap",prep0,run_star_tuned},
+    {"stars/original/mixed",prep1,run_star_original},{"stars/tuned/mixed",prep1,run_star_tuned},
+    {"stars/original/all-wrap",prep2,run_star_original},{"stars/tuned/all-wrap",prep2,run_star_tuned},
+};
+#define WORKLOAD_COUNT (sizeof workloads / sizeof *workloads)
+
 static size_t calibrate(const workload *w, uint64_t seed, uint64_t min_ns) {
     size_t n=1;
     while (n < (UINT64_C(1)<<22)) {
@@ -102,22 +113,20 @@ static size_t calibrate(const workload *w, uint64_t seed, uint64_t min_ns) {
     }
     return n;
 }
+static void emit(const workload *w,size_t n,uint64_t seed) {
+    w->prep(seed); uint64_t start=now_ns(); uint64_t checksum=w->run(n); uint64_t elapsed=now_ns()-start;
+    printf("{\"workload\":\"%s\",\"iterations\":%zu,\"elapsed_ns\":%" PRIu64 ",\"ns_per_op\":%.6f,\"checksum\":%" PRIu64 "}\n",w->name,n,elapsed,(double)elapsed/(double)n,checksum);
+}
 int main(int argc,char **argv) {
-    if (argc != 3) { fputs("usage: compiler-bench MIN_NS SEED\n",stderr); return 2; }
-    uint64_t min_ns=strtoull(argv[1],NULL,10), seed=strtoull(argv[2],NULL,10);
-    const workload workloads[]={
-        {"count/scalar/4k",prep0,run_count_scalar_4k},{"count/tuned/4k",prep0,run_count_tuned_4k},
-        {"count/scalar/1m",prep0,run_count_scalar_1m},{"count/tuned/1m",prep0,run_count_tuned_1m},
-        {"sum/ordered/65536",prep0,run_sum},{"regex/compile-search/4k",prep0,run_regex_compile},
-        {"regex/compiled-search/4k",prep0,run_regex_compiled},{"scanner/original",prep0,run_scanner},
-        {"stars/original/no-wrap",prep0,run_star_original},{"stars/tuned/no-wrap",prep0,run_star_tuned},
-        {"stars/original/mixed",prep1,run_star_original},{"stars/tuned/mixed",prep1,run_star_tuned},
-        {"stars/original/all-wrap",prep2,run_star_original},{"stars/tuned/all-wrap",prep2,run_star_tuned},
-    };
-    for(size_t i=0;i<sizeof workloads/sizeof *workloads;++i){
-        const workload *w=&workloads[i]; size_t n=calibrate(w,seed,min_ns); w->prep(seed);
-        uint64_t start=now_ns(); uint64_t checksum=w->run(n); uint64_t elapsed=now_ns()-start;
-        printf("{\"workload\":\"%s\",\"iterations\":%zu,\"elapsed_ns\":%" PRIu64 ",\"ns_per_op\":%.6f,\"checksum\":%" PRIu64 "}\n",w->name,n,elapsed,(double)elapsed/(double)n,checksum);
+    if(argc==3){
+        uint64_t min_ns=strtoull(argv[1],NULL,10), seed=strtoull(argv[2],NULL,10);
+        for(size_t i=0;i<WORKLOAD_COUNT;++i) emit(&workloads[i],calibrate(&workloads[i],seed,min_ns),seed);
+        return 0;
     }
-    return 0;
+    if(argc==(int)(3+WORKLOAD_COUNT) && !strcmp(argv[1],"--fixed")){
+        uint64_t seed=strtoull(argv[2],NULL,10);
+        for(size_t i=0;i<WORKLOAD_COUNT;++i){ size_t n=(size_t)strtoull(argv[3+i],NULL,10); if(!n){fputs("zero fixed batch\n",stderr);return 2;} emit(&workloads[i],n,seed); }
+        return 0;
+    }
+    fputs("usage: compiler-bench MIN_NS SEED | compiler-bench --fixed SEED N...\n",stderr); return 2;
 }
