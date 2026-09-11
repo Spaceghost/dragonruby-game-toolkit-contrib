@@ -1,0 +1,87 @@
+name: Zig persistent starfield evidence
+
+on:
+  pull_request:
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-starfield.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-starfield.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zig-starfield-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  starfield:
+    name: Starfield stages (${{ matrix.os }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            cpu: baseline
+          - os: ubuntu-24.04
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            cpu: native
+          - os: ubuntu-24.04-arm
+            archive: aarch64-linux
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+            cpu: native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install pinned Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-${{ matrix.archive }}-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "${{ matrix.sha256 }}  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-${{ matrix.archive }}-0.16.0" >> "$GITHUB_PATH"
+      - name: Correctness in all safety modes
+        working-directory: samples/12_c_extensions/12_zig_suite/starfield
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in Debug ReleaseSafe ReleaseFast; do
+            zig build check -Doptimize="$mode" -Dcpu=${{ matrix.cpu }} --summary all
+          done
+      - name: Measure update, pack and one-call sink
+        working-directory: samples/12_c_extensions/12_zig_suite/starfield
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/starfield"
+          mkdir -p "$out"
+          zig build install -Doptimize=ReleaseFast -Dcpu=${{ matrix.cpu }} --summary all 2>&1 | tee "$out/build.log"
+          zig build run -Doptimize=ReleaseFast -Dcpu=${{ matrix.cpu }} -- 11 2000000 2>&1 | tee "$out/raw.jsonl"
+          python3 validate.py < "$out/raw.jsonl" | tee "$out/report.md"
+          nm -u zig-out/lib/libstarfield_native.a > "$out/undefined-symbols.txt" || true
+          if grep -E '(^|[[:space:]])(malloc|calloc|realloc|aligned_alloc|posix_memalign|free)$' "$out/undefined-symbols.txt"; then
+            echo 'unexpected allocator import in starfield archive' >&2
+            exit 1
+          fi
+          nm -S --size-sort zig-out/lib/libstarfield_native.a > "$out/symbol-sizes.txt" || true
+          objdump -dr zig-out/lib/libstarfield_native.a > "$out/disassembly.txt" || true
+          sha256sum raw.jsonl report.md build.log undefined-symbols.txt symbol-sizes.txt disassembly.txt > "$out/SHA256SUMS.txt"
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain starfield evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: starfield-${{ matrix.os }}-${{ matrix.cpu }}
+          path: ${{ runner.temp }}/starfield
+          if-no-files-found: warn
+          retention-days: 30
