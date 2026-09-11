@@ -59,13 +59,10 @@ def odin_mutations(cpu: str, tests: bytes) -> None:
     original = SRC / 'competitive.odin'
     text = original.read_text()
     medium_newline = "count_medium :: proc \"contextless\" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {\n\tnewline: simd.u8x32 = u8('\\n')"
+    long_pair = 'wide := cast(Wide_Counts)even + cast(Wide_Counts)odd'
     mutations = (
         ('medium-vector-newline', medium_newline, medium_newline.replace("'\\n'", "'\\r'"), 45, 'RIVAL_COUNT_MISMATCH'),
-        # Drop one independently accumulated half in the long path. This is a
-        # genuine observable defect, unlike a 255->256 edit that the pinned Odin
-        # compiler happened to make behaviorally equivalent.
-        ('drop-odd-accumulator', 'total += uintptr(ea[lane]) + uintptr(oa[lane])',
-         'total += uintptr(ea[lane])', 45, 'RIVAL_COUNT_MISMATCH'),
+        ('drop-odd-accumulator', long_pair, 'wide := cast(Wide_Counts)even', 45, 'RIVAL_COUNT_MISMATCH'),
         ('star-direction', 'nx := vx + vs', 'nx := vx - vs', 46, 'RIVAL_STAR_MISMATCH'),
     )
     for name, old, new, code, diagnostic in mutations:
