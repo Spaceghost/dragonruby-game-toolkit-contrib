@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
     test_exe.root_module.linkSystemLibrary("sqlite3", .{});
     const run = b.addRunArtifact(test_exe);
     run.has_side_effects = true;
-    const tests = b.step("test", "Check direct SQLite operations and retained C ABI ownership/error paths");
+    const tests = b.step("test", "Check direct SQLite operations, cached query rows and retained C ABI ownership/error paths");
     tests.dependOn(&run.step);
     const direct = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("direct.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
     direct.root_module.linkSystemLibrary("sqlite3", .{});
@@ -20,5 +20,12 @@ pub fn build(b: *std.Build) void {
     run_direct.has_side_effects = true;
     tests.dependOn(&run_direct.step);
     b.step("direct-test", "Execute real SQLite batch tests and isolated cleanup-failure controls").dependOn(&run_direct.step);
+    const query = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("query.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
+    query.root_module.addIncludePath(b.path("."));
+    query.root_module.linkSystemLibrary("sqlite3", .{});
+    const run_query = b.addRunArtifact(query);
+    run_query.has_side_effects = true;
+    tests.dependOn(&run_query.step);
+    b.step("query-test", "Execute cached packed query-row tests against real SQLite").dependOn(&run_query.step);
     b.default_step = tests;
 }

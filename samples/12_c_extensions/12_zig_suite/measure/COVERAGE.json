@@ -9,6 +9,9 @@
   "measure/ruby.c": "Real mruby allocator-hook profiling and Ruby-to-Zig batch timing through the test adapter",
   "src/competitive.h": "Shared native contracts for matched C and Zig performance candidates",
   "src/competitive.c": "Readable Clang-vector C candidates receiving the same algorithmic optimizations as Zig",
+  "sqlite/query.h": "Cached prepared-query and packed first-column output ABI",
   "competition/test.c": "Independent LF specification, original-star differential tests and guarded-memory checks for both rivals",
-  "competition/bench.c": "Matched C/Zig competition with frozen controls and separately profiled allocations"
+  "competition/bench.c": "Matched C/Zig competition with frozen controls and separately profiled allocations",
+  "compiler_matrix/bench.c": "Same-source host-Clang versus zig-cc compiler/profile runtime harness",
+  "starfield/bench.c": "Persistent starfield update/pack/single-sink benchmark"
 }

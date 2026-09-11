@@ -75,7 +75,7 @@ jobs:
           fi
           nm -S --size-sort zig-out/lib/libstarfield_native.a > "$out/symbol-sizes.txt" || true
           objdump -dr zig-out/lib/libstarfield_native.a > "$out/disassembly.txt" || true
-          sha256sum raw.jsonl report.md build.log undefined-symbols.txt symbol-sizes.txt disassembly.txt > "$out/SHA256SUMS.txt"
+          (cd "$out" && sha256sum raw.jsonl report.md build.log undefined-symbols.txt symbol-sizes.txt disassembly.txt > SHA256SUMS.txt)
           cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain starfield evidence
         if: always()
