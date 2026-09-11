@@ -6,7 +6,7 @@ measure equal work, retain losses, and promote only when correctness, timing,
 allocation behavior and code size support the change on the relevant targets.
 Shared-runner measurements are observations, not universal performance claims.
 
-## 1. Persistent starfield to one renderer submission
+## 1. Persistent starfield to the real renderer boundary
 
 Implemented native shape:
 
@@ -14,24 +14,33 @@ Implemented native shape:
 Ruby creates once
   -> persistent caller-owned x[] / y[] / speed[] / packed sprite records
   -> Zig SIMD update
-  -> pack render records
-  -> exactly one batch-sink call
+  -> optional pack/render adapter
+  -> one Ruby starfield draw dispatch
 ```
 
-The test sink deliberately consumes every packed record. It proves batching and
-locates CPU cost, but it is not the proprietary DragonRuby renderer.
+The current test sink deliberately consumes every packed record. It proves the
+native lifecycle and locates CPU cost, but it is not the proprietary DragonRuby
+renderer. The supported sample API exposes per-sprite `draw_sprite`, so the
+portable intermediate adapter uses one Ruby starfield object and performs the
+native update before issuing renderer calls. It does not invent an unavailable
+native batch-render API.
 
-Required evidence:
+Current source-level experiments, each independently measured:
 
-- 64 / 1,024 / 16,384 / 100,000 stars.
-- Separate `update`, `update+pack`, and `update+pack+batch sink` timings.
-- Allocation-symbol audit for native implementation.
-- Exact state/checksum validation before timing.
-- Actual DragonRuby batch-render adapter when a matching SDK is available.
+- C `restrict` / Zig `noalias` for the already-documented disjoint SoA storage.
+- Hoist invariant width/height/path fields to initialization; hot packing writes
+  coordinates only.
+- Skip packing entirely in the per-sprite renderer adapter and draw from x/y SoA.
+- Consider 32/64-byte caller-storage alignment only after aligned/misaligned
+  measurements show a repeatable gain.
+
+Required evidence remains 64 / 1,024 / 16,384 / 100,000 stars, separate update,
+pack and sink timings, allocation-symbol audit, exact state/checksums, and a
+matching proprietary SDK renderer execution before calling this end-to-end.
 
 Promotion gate: one native starfield object per Ruby starfield, no per-star Ruby
-round trip, one renderer submission per frame, and no regression relative to the
-measured kernel path outside the documented packing/render costs.
+state/data-object round trip, and no hidden packing or allocation cost that erases
+the measured kernel win.
 
 ## 2. Cached Ruby `query_json`
 
@@ -44,26 +53,21 @@ Current architecture:
 
 ```text
 Ruby query_json(sql)
-  -> one cached prepared SQLite statement keyed by exact SQL bytes
+  -> cached prepared SQLite statement keyed by exact SQL bytes
   -> step rows directly
   -> reusable native packed row buffer
   -> reset statement
   -> construct Ruby array/strings after SQLite borrowed values expire
 ```
 
-Required evidence:
+Evidence includes native 1 / 64 / 1,024-row C-prepare-each / C-cached /
+Zig-cached comparisons, separate SQLite allocation profiling, and real pinned
+mruby cache-hit timings/allocation records for all six VM flavor/boxing builds.
 
-- Native 1 / 64 / 1,024-row matrix:
-  `C prepare-each`, `C cached`, `Zig cached`.
-- Separate SQLite allocator profile from timing.
-- Ruby cache-hit 1 / 64 / 1,024-row timing through real pinned mruby.
-- mruby allocator-call/requested-byte/high-water records for Ruby result creation.
-- Failed prepare must not evict a usable cached statement.
-- NULL, empty strings and embedded NUL bytes remain covered.
-
-Promotion gate: repeated Ruby calls use the cached statement, errors/reset/finalize
-remain checked, and the native cache gain survives enough Ruby object construction
-to justify replacing the old adapter.
+Next source-level target: if the matching DragonRuby host table exposes
+`mrb_ary_new_capa`, benchmark pre-sizing the result array from the already-known
+row count. Do not extend the production host ABI merely because upstream mruby
+has the function; proprietary SDK validation decides whether it is available.
 
 ## 3. SQLite gains above SQLite, across languages
 
@@ -84,67 +88,60 @@ Report preparation, execution, result construction, Ruby allocation and SQLite
 allocator traffic separately. No combined number is allowed to masquerade as a
 language-only speedup.
 
-## 4. Compiled regex objects
+## 4. Batch the nested-value reader
 
-The Ruby convenience method still compiles every call. Add a persistent compiled
-regex object/cache and benchmark:
+`drbz_sum_tree` intentionally avoids depending on mruby value layout. The new
+candidate decodes up to sixteen adjacent values per C/Zig callback while retaining
+a fixed traversal stack, strict evaluation order, cycle/depth rejection and
+transactional output. A nested descent discards and later re-decodes trailing
+siblings instead of retaining Ruby views in a large pending buffer.
 
-- compile + one search;
-- compile once + one search;
-- compile once + 100 searches;
-- early, late, absent and dense-prefix inputs.
+The real-mruby benchmark pits four implementations against each other:
 
-Specialize baseline/optimized matcher strategy at compile time rather than carry
-a runtime `optimized` branch through recursive matching. Compile useful prefix
-metadata only when evidence shows a win without turning tiny-regex into a much
-larger engine.
+- Ruby traversal;
+- direct C traversal that depends on mruby's value layout;
+- Zig with one-value reader callbacks;
+- Zig with sixteen-value reader callbacks.
 
-## 5. Batch the nested-value reader
+Flat and nested 64-value workloads are measured separately. The direct-C result
+quantifies the cost of keeping Zig ABI-independent rather than pretending that
+abstraction is free.
 
-`drbz_sum_tree` intentionally avoids depending on mruby value layout, but today
-it crosses the C/Zig callback boundary once per value. Test a small fixed batch
-of decoded views (for example 16) while preserving traversal order, fixed stack,
-cycle rejection and transactional output.
-
-Benchmark flat 8/64/1K values plus shallow/deep nested structures. Record callback
-count in addition to time so the causal mechanism is explicit.
-
-## 6. Short newline dispatch
+## 5. Short newline dispatch
 
 Keep simple short and long kernels rather than forcing one implementation to win
 all lengths. Sweep every length through 512 bytes, representative larger vector
-boundaries, and several pointer offsets on x86 baseline/native and ARM native.
-Choose a threshold only if a stable winning region exists across repeated runs.
+boundaries, and pointer offsets on x86 baseline/native, ARM native, Windows and
+both macOS runners. Choose a threshold only if a stable winning region exists.
 
-## 7. Compiler/toolchain matrix
+The preferred final shape is two readable microkernels plus one tiny length
+branch, not an ISA-intrinsic thicket.
 
-Compile identical C workload sources with host Clang and `zig cc` under O2/O3/Oz
-and optional ThinLTO. Run the original five hosted platforms plus Linux baseline:
+## 6. Compiler/profile partitioning
 
-- Linux x86-64 baseline/native;
-- Linux ARM64 native;
-- Windows x86-64 native;
-- macOS ARM64 native;
-- macOS x86-64 native.
+The Clang/zig-cc matrix shows there is no universal best `-O` profile. Some
+workloads run fastest at `-Oz` or `-O2`, and the winner changes by architecture.
+This creates a useful source-level option: compile independent kernel translation
+units with the compiler/profile that repeatedly wins on that target, while
+retaining one common source implementation.
 
-The timing harness is precompiled with host Clang on Linux/macOS so candidate
-compiler code generation cannot optimize or miscompile the timer itself. Windows
-uses QPC in the candidate translation unit because the hosted Clang and zig-cc
-object ABIs differ there. Equivalent original/tuned workloads execute identical
-iteration counts. Zero/negative timer results are rejected.
+Promotion requires repeated cross-runner stability, equal CPU target semantics,
+and code-size/build-time reporting. A per-kernel profile win is acceptable; a
+single cherry-picked shared-runner sample is not.
 
-Measure runtime, build time, executable/text size and correctness checksum. Zig's
-own native implementation belongs in a parallel language comparison, not in a
-claim about which C compiler won.
+For broad-distribution binaries, also test baseline/native multiversioning with
+one startup dispatch. Keep it only when the runtime gain justifies duplicated
+text size.
 
-## 8. C star code-size follow-up
+## 7. C star code-size follow-up
 
-Sparse mixed-wrap repair made both implementations faster, but current C machine
-code expanded more than Zig on ARM. Test an outlined C repair helper that receives
-already-computed results/masks. Keep it only if the size reduction does not cause
-a material mixed-wrap performance loss. No assembly or duplicated lane forest.
+Sparse mixed-wrap repair made both implementations faster, but C machine code
+expanded more than Zig on ARM. The current experiment outlines C mixed repair
+using pointers to already-computed vector results/masks so baseline x86 does not
+change the vector-argument ABI. Keep it only if size falls without a material
+mixed-wrap regression.
 
-## 9. Platform adapters
+## 8. Platform adapters
 
 After the application-level work above:
 
@@ -155,5 +152,5 @@ After the application-level work above:
 - Android JNI lifetime/exception cleanup.
 - Matching proprietary DragonRuby SDK compilation/loading and real renderer run.
 
-The PR does not leave draft until the platform/renderer claims are backed by the
+The PR does not leave draft until platform/renderer claims are backed by the
 actual relevant environments rather than inferred from portable test hosts.
