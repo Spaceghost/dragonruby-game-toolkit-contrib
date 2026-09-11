@@ -8,7 +8,31 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+static uint64_t now_ns(void) {
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER value;
+    if (frequency.QuadPart == 0) QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&value);
+    return (uint64_t)((long double)value.QuadPart * 1000000000.0L / (long double)frequency.QuadPart);
+}
+#elif defined(__APPLE__)
+#include <mach/mach_time.h>
+static uint64_t now_ns(void) {
+    static mach_timebase_info_data_t timebase;
+    if (timebase.denom == 0) mach_timebase_info(&timebase);
+    return (uint64_t)((__uint128_t)mach_absolute_time() * timebase.numer / timebase.denom);
+}
+#else
 #include <time.h>
+static uint64_t now_ns(void) {
+    struct timespec ts;
+    assert(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+}
+#endif
 
 extern double control_c_sum(double, const double *, size_t);
 extern size_t control_c_count(const unsigned char *, size_t);
@@ -27,11 +51,6 @@ static drbz_star aos[NSTARS];
 static float xs[NSTARS], ys[NSTARS], speeds[NSTARS];
 static uint64_t rng_state, rng_calls;
 
-static uint64_t now_ns(void) {
-    struct timespec ts;
-    assert(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
-    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
-}
 static uint32_t prng32(uint64_t *state) {
     uint64_t x = *state;
     x ^= x >> 12; x ^= x << 25; x ^= x >> 27; *state = x;
