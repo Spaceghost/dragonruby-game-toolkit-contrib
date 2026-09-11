@@ -32,7 +32,7 @@ drbo_square :: proc "c" (value: i32, out: ^i32) -> i32 {
 // Validate the whole input before publishing output, including exact in-place
 // operation. Partial overlap remains outside the shared ABI contract.
 @(export)
-drbo_squares :: proc "c" (input: [^]i32, output: [^]i32, count: uintptr) #no_bounds_check -> i32 {
+drbo_squares :: proc "c" (input: [^]i32, output: [^]i32, count: uintptr) -> i32 #no_bounds_check {
 	for i: uintptr = 0; i < count; i += 1 {
 		value := input[i]
 		if value < -46340 || value > 46340 {
@@ -48,7 +48,7 @@ drbo_squares :: proc "c" (input: [^]i32, output: [^]i32, count: uintptr) #no_bou
 // One accumulator intentionally preserves source-order additions. There is no
 // multiply here for a compiler to contract into an FMA.
 @(export)
-drbo_sum_ordered :: proc "c" (accumulator: f64, values: [^]f64, count: uintptr) #no_bounds_check -> f64 {
+drbo_sum_ordered :: proc "c" (accumulator: f64, values: [^]f64, count: uintptr) -> f64 #no_bounds_check {
 	sum := accumulator
 	for i: uintptr = 0; i < count; i += 1 {
 		sum += values[i]
@@ -59,7 +59,7 @@ drbo_sum_ordered :: proc "c" (accumulator: f64, values: [^]f64, count: uintptr) 
 // A source-unrolled candidate that still uses the same single accumulator and
 // therefore the same left-to-right evaluation order.
 @(export)
-drbo_sum_unrolled :: proc "c" (accumulator: f64, values: [^]f64, count: uintptr) #no_bounds_check -> f64 {
+drbo_sum_unrolled :: proc "c" (accumulator: f64, values: [^]f64, count: uintptr) -> f64 #no_bounds_check {
 	sum := accumulator
 	i: uintptr = 0
 	for count - i >= 4 {
@@ -98,7 +98,7 @@ drbo_stars_soa :: proc "c" (#no_alias x, #no_alias y: [^]f32, #no_alias speed: [
 }
 
 @(export)
-drbo_count_scalar :: proc "c" (bytes: [^]u8, count: uintptr) #no_bounds_check -> uintptr {
+drbo_count_scalar :: proc "c" (bytes: [^]u8, count: uintptr) -> uintptr #no_bounds_check {
 	total: uintptr = 0
 	for i: uintptr = 0; i < count; i += 1 {
 		if bytes[i] == u8('\n') {
