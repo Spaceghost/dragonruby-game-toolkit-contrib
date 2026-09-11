@@ -1,171 +1,101 @@
-# Parallel Zig native samples, with measured alternatives
+# Parallel native samples with measured C, Zig and Odin alternatives
 
-This suite extends `11_zig_native_pixel_arrays`. The original C examples stay
-unchanged. Small native kernels have readable implementations and explicitly
-named performance candidates; the tests compare outputs before timing them.
+This suite extends `11_zig_native_pixel_arrays`. Original examples stay unchanged as references.
+Portable native work now has readable C, Zig and Odin implementations where comparison is useful,
+with differential tests before timing and explicit retention of losing candidates.
 
-**Scope:** portable sample logic is ported, not every platform adapter or test
-harness. [COVERAGE.json](COVERAGE.json) accounts for every tracked C-family
-source and header, including the Rust samples. The audit rejects unclassified
-files, missing implementations and changes to pinned original sources. It does
-not turn a retained SDK adapter into a completed Zig port by relabeling it.
+**Scope:** compute kernels, traversal/worker primitives, persistent starfield state and cached SQLite
+output are portable. Platform SDK adapters remain platform code. [COVERAGE.json](COVERAGE.json)
+accounts for the tracked native sources; [EVIDENCE.md](EVIDENCE.md) defines proof limits; and
+[PERFORMANCE_ROADMAP.md](PERFORMANCE_ROADMAP.md) records the remaining application/platform gates.
+Finite differential/mutation tests are not formal proof.
 
-[EVIDENCE.md](EVIDENCE.md) maps claims to executed checks and their limits,
-including calibrated allocator interception, source mutation tests and complete
-benchmark-run validation. These are finite tests, not formal verification.
+## Current language competition
 
-## What is implemented
+The matched rivals workflow uses pinned Zig 0.16.0 and pinned Odin `dev-2026-09` plus optimized C.
+It runs on hosted Linux x86-64 baseline/native and ARM64 native and retains raw timing/allocation
+records, source/object hashes, symbol sizes and disassembly.
 
-| Original example | Zig implementation | Alternative and validation |
-| --- | --- | --- |
-| `01_basics` square | Checked scalar square | Transactional eight-lane batches; exhaustive comparison over all 92,681 defined signed inputs |
-| `02_intermediate` tiny-regex | Caller-owned compiled patterns and bounded matcher | Character-class bitmaps and SIMD leading-literal search; 480,568 short C comparisons plus long-input, protected-page and separately labeled binary tests |
-| `03_native_pixel_arrays` scanner | Existing faithful Zig sample remains the baseline | Persistent pixels update only changed rows; 10,000 frames compared against extracted original C and previous Zig |
-| `04_handcrafted_extension` Adder | Ordered nested traversal | Fixed 64-frame stack, cycle/depth rejection and unchanged output on error |
-| Advanced starfield | Scalar star motion | Eight-lane structure-of-arrays updates; 3,016,000 star updates compared bit-for-bit, including RNG state and call counts |
-| macOS greetings | Caller-buffer UTF-8 byte formatting | No Foundation temporary strings in the kernel; exact-capacity and short-buffer tests |
-| `09_handcrafted_threads` Worker | Atomic lifecycle with explicit owner-thread controls | Failed creation, idempotent start/stop, restart and 100 real pthread lifetimes |
-| `10_sqlite3` | Connection and statement lifecycle | Checked errors, borrowed column views and prepared-statement reuse; matching C prepare-per-query and reuse controls |
-| Previous SIMD LF example | Previous 16-byte implementation remains a benchmark baseline | 32-byte blocked accumulation reduces horizontal-reduction frequency, with guarded-page and chunk-boundary tests |
+Odin is not a transliteration-only exhibit. It uses Odin SIMD vectors, multipointers, `#no_alias`,
+contextless hot helpers and the language's unaligned SIMD load/store intrinsics. C uses Clang's
+target-independent vector extensions; Zig uses native vector types and compile-time specialization.
+No implementation uses handwritten assembly or fast-math to manufacture a win.
 
-The square batch and nested traversal are not claimed as measured speedups.
-Strictly ordered sum unrolling is deliberately retained as an experimental
-candidate, including workloads where it loses. No fast-math reassociation is
-used to manufacture a faster but different answer.
+The shared correctness corpus now covers C/Zig/Odin newline and star competitors, including protected
+memory, alignments, exact float/RNG state, all eight-star wrap masks, and compiled source mutants for
+all three languages. Odin also exposes parallel portable ABIs for checked square/batches, strict
+ordered sums, scalar/SoA stars, scanner state, nested traversal, greeting and worker lifecycle.
+The same C app tests are compiled against Zig and Odin symbols for traversal, greeting and pthread
+lifecycle behavior.
 
-## Run native tests and recorded measurements
+## Persistent starfield
 
-Use **Zig 0.16.0**, Python 3.10+ and a C-capable host. From this directory:
+Zig and Odin implement the same caller-owned persistent starfield layout and deterministic xorshift64*
+state. Both provide update, full pack, coordinate-only pack and one borrowed batch-sink frame call.
+Owned starfields specialize their known RNG path while the generic exported star ABI keeps an arbitrary
+callback. The paired starfield benchmark runs both languages in the same process with identical seeds,
+iterations and sink semantics at 64 / 1,024 / 16,384 / 100,000 stars.
 
-```sh
-zig build test -Doptimize=Debug -Dcpu=baseline --summary all
-zig build test -Doptimize=ReleaseSafe -Dcpu=baseline --summary all
-python tools/test_report.py -v
-python tools/measure.py kernels --cpu native --output bench.log
-python tools/report.py bench.log
-```
+The public sample uses one native starfield object rather than thousands of Ruby `Star` objects. It
+still uses the supported DragonRuby `draw_sprite` mechanism internally because no public native batch
+renderer ABI is assumed. Actual matching proprietary SDK loading and GPU renderer validation remain
+release gates.
 
-`bench` depends on the correctness suite, including long regex inputs that
-reach the SIMD loop. It warms each implementation, runs 11 interleaved trials
-in shuffled order, validates observable checksums, and prints every raw
-`BENCH` record. The recorder captures source hashes, command, CPU, OS and
-compiler information at execution. The reporter refuses incomplete or
-inconsistent runs rather than reconstructing metadata on the reporting host.
-Old bare logs without capture provenance are not accepted as new measurements.
+## SQLite and `query_json`
 
-Results include median, minimum, maximum, median absolute deviation, noise
-flags and an explicit reference variant. A noisy result is not converted into
-a brittle CI speed gate. C and Zig receive the same optimization mode and CPU
-target; the C optimizer is not artificially disabled.
+SQLite remains the upstream C engine. C, Zig and Odin implement matching cached prepared-statement
+and packed first-column output policies. Tests cover NULL, empty/binary data, errors, reset/finalize,
+failed prepare preserving a usable cache and allocator lifecycle. Warmed cached variants are compared
+at 1 / 64 / 1,024 rows; a separate working-set experiment compares single-entry and fixed-four caches
+with 1 / 4 / 16 SQL strings.
 
-The deliberately corrupted scanner run must return **42** and exactly identify
-frame 17 / pixel 7. An unrelated crash does not count as successful detection.
-The separate Linux evidence workflow compiles four source mutants and requires
-the intended runtime failures. To run it, use native system cc and a
-GNU-compatible linker in addition to the pinned Zig toolchain:
+The Ruby adapter constructs real mruby arrays/strings only after the native packed result is complete;
+Ruby allocation/result-construction time is measured separately from SQLite timing. Architectural
+cache savings are credited to the cache policy, not to whichever language happens to implement it.
 
-```sh
-python tools/mutations.py --cpu baseline
-```
+## Nested values and workers
 
-The suite's CI executes on standard hosted Linux x86-64 and ARM64 runners.
-The x86 matrix includes baseline and host-native CPU targets. This is not a
-claim that the new suite has inherited the old sample's Windows/macOS results.
+`drbz_sum_tree` deliberately keeps mruby value layout out of Zig. The batched variant requests up to
+16 decoded views per adapter call while preserving strict depth-first evaluation order. The benchmark
+keeps direct C, single-reader Zig, batched Zig and Ruby traversal visible so ABI independence has a
+measured cost instead of a marketing adjective. Odin implements the same single/batched host-reader ABI.
 
-For real-SQLite tests and repeated-query measurements, install the host SQLite
-development library, then run from the suite directory:
+Workers use explicit owner-thread lifecycle and acquire/release atomics. Native thread callbacks never
+enter Ruby. The remaining SDL adapter should replace polling delay with interruptible wait/wake before
+this migration is considered complete.
 
-```sh
-(cd sqlite && zig build test -Doptimize=ReleaseSafe -Dcpu=native --summary all)
-python tools/measure.py sqlite --cpu native --output sqlite.log
-python tools/report.py sqlite.log
-```
+## Newline kernels and dispatch
 
-SQLite is still the upstream C engine. The Zig wrapper does not allocate its
-own error strings, but SQLite itself allocates. Tests force an execution-time
-query error, failed open, constraint error and busy close, check NULL/empty/
-binary column values, and verify that statements are released. Both C and Zig
-now have prepare-per-query and statement-reuse implementations with matching
-prepare flags and reset/clear-bindings policy. `zig_reuse` is compared with
-`c_reuse`: translating a wrapper is not credited with avoiding work that C can
-also avoid. Historical timings remain specific to their earlier controls.
+No single newline kernel is forced to win every size. The competition records scalar/previous/tuned
+C/Zig/Odin implementations, while an exhaustive sweep measures every length 0..512 at offsets 0/1/15.
+Odin's medium path accumulates up to 255 32-byte hit masks per u8 vector, widens to 32 u16 lanes once,
+and reduces once. Larger 4 / 8 / 16 / 64 KiB and 1 MiB cases keep crossover behavior visible.
+A dispatcher threshold is installed only when runner evidence shows a stable winning region.
 
-## Call the new functions from Ruby
+## Compiler/profile experiments
 
-`bridge/bridge.c` registers a parallel `FFI::Zig` module:
+C compiler comparison is separate from language comparison. Identical C sources are built with host
+Clang and `zig cc` across optimization profiles and hosted Linux, Windows and macOS targets. Odin has a
+separate pinned profile experiment for `minimal`, `size`, `speed` and `aggressive`, recording compiler
+and link time, object/text/symbol size and runtime through the unchanged rivals harness.
 
-```ruby
-FFI::Zig.square(-17)                       # 289
-FFI::Zig.count_newlines("\0\n\0\n")        # 2
-FFI::Zig.regex_index('[a-z]+', '123abc')     # 3
-FFI::Zig.sum(1, [2, [3]], 4)                # 10.0
-FFI::Zig.hello('DragonRuby')                # "Hello DragonRuby!"
-FFI::Zig.reset_scanner
-FFI::Zig.update_scanner_texture
-```
+## Ruby adapter
 
-The Ruby regex convenience call compiles on each invocation. Native benchmarks
-measure reuse of compiled patterns instead, so their search timings must not
-be presented as timings for that convenience method. The native regex API
-allows caller-owned compiled storage. The Ruby greeting adapter has an
-explicit 511-byte output limit; the native API accepts any valid capacity.
+`bridge/bridge.c` remains a shared host adapter. That is intentional: duplicating mruby argument parsing,
+Ruby string/array construction and SDK registration three times would compare boilerplate rather than
+native languages. Native C/Zig/Odin cores are compared below that common boundary; Ruby and renderer
+costs are measured as their own stages.
 
-To run the adapter against a prepared real mruby test VM, follow the existing
-[pinned preparation recipe](../11_zig_native_pixel_arrays/tests/DRAGONRUBY_MRUBY.md),
-then run from `bridge/`:
+Build/test recipes continue to use the pinned workflow definitions under `.github/workflows/`. For a
+matching proprietary DragonRuby SDK, build the bridge with its real headers and stage the shared library
+under the game platform's `native/<platform>/` directory. Public mruby test hosts do not establish
+proprietary host-table or GPU-renderer compatibility.
 
-```sh
-zig build test -Dmruby-root=/absolute/path/to/prepared-mruby \
-  -Dboxing=word -Dpublished=true -Doptimize=ReleaseSafe -Dcpu=baseline
-```
+## What remains before PR #2 can leave draft
 
-The Ruby workflow builds upstream 3.4.0 and the complete published DragonRuby
-3.0.0 patch with word, NaN and unboxed layouts. It exercises real Ruby strings,
-arrays, exceptions, GC, three VM lifetimes and six registrations. Its host
-contract is deliberately separate from the proprietary SDK table.
-
-For a matching proprietary SDK, build from `bridge/` with:
-
-```sh
-zig build -Dsdk-include=/absolute/path/to/sdk/include \
-  -Doptimize=ReleaseSafe -Dcpu=baseline
-```
-
-Stage the resulting `zig_suite` shared library under the game's matching
-`native/<platform>/` directory. `app/main.rb` is the sample game. Actual SDK
-compilation, extension loading and renderer execution remain release gates;
-public mruby tests cannot establish proprietary host-table compatibility.
-
-## Ownership and compatibility boundaries
-
-The native kernels accept caller-owned buffers and do not call a heap
-allocator. A separate calibrated Linux probe observes six allocator APIs
-while exercising `native.zig` exports and regex compilation/search with a
-nonallocating RNG callback. It does not instrument every exported API or every
-allocation mechanism. See [the exact scope](EVIDENCE.md). Raw timing records
-still use `allocation_count: null` because their timing regions are not
-instrumented. Ruby allocation, thread creation, SQLite internals and rendering
-are outside the allocation-free kernel claim.
-
-Pointers are borrowed only for the documented operation or view lifetime.
-Callbacks must not raise through a Zig frame or execute Ruby from a worker.
-Square overflow, malformed/oversized regexes, deep/cyclic arrays and oversized
-greetings are reported explicitly rather than reproducing undefined behavior
-or unbounded recursion. Regex parity covers the shipped tiny-regex dialect on
-the tested ASCII domain, including its dot/newline setting and unusual failed
-match-length behavior. It is not the Rust `rure`/Unicode regex engine.
-
-## What remains, rather than being silently called finished
-
-The native SoA starfield, worker and SQLite APIs are usable through their C
-headers, but batched Ruby star objects/drawing, the SDL worker adapter and a
-replacement Ruby `query_json` adapter are not yet wired into this sample game.
-End-to-end Ruby/renderer and whole-application allocation-profile measurements
-remain separate from the kernel benchmarks and allocator-reference probe.
-
-The original iOS Objective-C main-thread dispatch, macOS framework integration,
-Steamworks C++ shim and Android JNI bridge remain platform boundaries. They
-are inventoried but not claimed as completed Zig replacements. Steam startup
-error handling and JNI reference/exception cleanup still need their own
-platform-tested changes. Rust FFI bindings, its C header/examples/tests, and
-the existing C ABI/renderer test oracles are deliberately retained.
+- Matching proprietary DragonRuby SDK compilation, extension loading and real renderer execution.
+- Whole-application allocation/render measurements beyond scoped native/SQLite/mruby hosts.
+- Interruptible SDL worker adapter and direct new-suite Windows/macOS execution.
+- Apple framework/main-thread, Steamworks and Android JNI validation on real target environments.
+- Any dispatcher/cache/profile promotion still must survive the retained runner evidence rather than
+  being inferred from a single hosted-machine win.
