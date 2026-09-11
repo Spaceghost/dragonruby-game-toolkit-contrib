@@ -37,9 +37,9 @@ void drbo_scanner_reset(drbz_scanner *);
 const uint32_t *drbo_scanner_frame(drbz_scanner *);
 
 /* Persistent starfield state lives entirely in caller-owned storage. A frame
- * does one native update, one pack into borrowed sprite records, then one sink
- * call. Storage may be replaced only between frames. path_id=1 is the sample's
- * shared tiny-star asset; an SDK adapter maps it to its renderer representation. */
+ * does one native update, one coordinate pack into borrowed sprite records,
+ * then one sink call. Width/height/path are initialized once and full pack can
+ * restore them. Storage may be replaced only between frames. */
 typedef struct { float x, y, w, h; uintptr_t path_id; } drbz_packed_sprite;
 typedef struct {
     float *x, *y, *speed;
@@ -54,6 +54,12 @@ void drbz_starfield_update(drbz_starfield *);
 void drbz_starfield_pack(drbz_starfield *);
 void drbz_starfield_update_pack(drbz_starfield *);
 void drbz_starfield_frame(drbz_starfield *, drbz_sprite_batch_sink, void *);
+size_t drbo_starfield_storage_bytes(size_t count);
+int32_t drbo_starfield_init(void *storage, size_t storage_bytes, size_t count, uint64_t seed, drbz_starfield *out);
+void drbo_starfield_update(drbz_starfield *);
+void drbo_starfield_pack(drbz_starfield *);
+void drbo_starfield_update_pack(drbz_starfield *);
+void drbo_starfield_frame(drbz_starfield *, drbz_sprite_batch_sink, void *);
 /* Caller-owned compiled storage. Failed compilation leaves the previous value
  * untouched; search requires a successful compile. Work limits count matcher
  * steps, not elapsed time. Concurrent searches need separate length outputs. */
