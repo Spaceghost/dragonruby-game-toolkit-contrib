@@ -9,10 +9,17 @@ void drbc_query_cache_init(drbz_query_cache *, sqlite3 *);
 int drbc_query_cache_clear(drbz_query_cache *);
 drbz_query_result drbc_query_pack(drbz_query_cache *, const unsigned char *, size_t);
 drbz_query_result drbc_query_pack_each(drbz_query_cache *, const unsigned char *, size_t);
+
 static drbz_database database;
 static uint32_t parameter_seed;
 static drbz_query_cache query_each, query_c, query_zig, query_odin;
 static int query_ready;
+
+#define MULTI_SLOTS 4
+#define MULTI_VARIANTS 6
+static drbz_query_cache multi[MULTI_VARIANTS][MULTI_SLOTS];
+static int multi_ready;
+
 #ifdef DRBZ_PROFILE
 static sqlite3_mem_methods underlying;
 static meter_stats statistics;
@@ -58,6 +65,22 @@ static const char *query_sql(int detail) {
         default: abort();
     }
 }
+static const char *working_sql(size_t index) {
+    static const char *const sql[16]={
+        "SELECT v FROM query_rows WHERE rowid=1", "SELECT v FROM query_rows WHERE rowid=2",
+        "SELECT v FROM query_rows WHERE rowid=3", "SELECT v FROM query_rows WHERE rowid=4",
+        "SELECT v FROM query_rows WHERE rowid=5", "SELECT v FROM query_rows WHERE rowid=6",
+        "SELECT v FROM query_rows WHERE rowid=7", "SELECT v FROM query_rows WHERE rowid=8",
+        "SELECT v FROM query_rows WHERE rowid=9", "SELECT v FROM query_rows WHERE rowid=10",
+        "SELECT v FROM query_rows WHERE rowid=11", "SELECT v FROM query_rows WHERE rowid=12",
+        "SELECT v FROM query_rows WHERE rowid=13", "SELECT v FROM query_rows WHERE rowid=14",
+        "SELECT v FROM query_rows WHERE rowid=15", "SELECT v FROM query_rows WHERE rowid=16"
+    };
+    assert(index<16); return sql[index];
+}
+static size_t working_set(const bench_case *c) {
+    return c->detail==20?1:c->detail==21?4:c->detail==22?16:0;
+}
 static uint64_t packed_checksum(const drbz_query_cache *cache) {
     uint64_t h=UINT64_C(1469598103934665603); size_t pos=0;
     for(size_t row=0;row<cache->rows;++row){
@@ -66,6 +89,17 @@ static uint64_t packed_checksum(const drbz_query_cache *cache) {
     }
     assert(pos==cache->output_len); return h;
 }
+static void init_impl(unsigned impl, drbz_query_cache *cache) {
+    if(impl==0) drbc_query_cache_init(cache,database.handle);
+    else if(impl==1) drbz_query_cache_init(cache,database.handle);
+    else drbo_query_cache_init(cache,database.handle);
+}
+static int clear_impl(unsigned impl, drbz_query_cache *cache) {
+    return impl==0?drbc_query_cache_clear(cache):impl==1?drbz_query_cache_clear(cache):drbo_query_cache_clear(cache);
+}
+static drbz_query_result pack_impl(unsigned impl, drbz_query_cache *cache, const unsigned char *sql, size_t len) {
+    return impl==0?drbc_query_pack(cache,sql,len):impl==1?drbz_query_pack(cache,sql,len):drbo_query_pack(cache,sql,len);
+}
 static void clear_query_caches(void) {
     if(!query_ready) return;
     assert(drbc_query_cache_clear(&query_each)==SQLITE_OK);
@@ -73,6 +107,14 @@ static void clear_query_caches(void) {
     assert(drbz_query_cache_clear(&query_zig)==SQLITE_OK);
     assert(drbo_query_cache_clear(&query_odin)==SQLITE_OK);
     query_ready=0;
+}
+static void clear_multi(void) {
+    if(!multi_ready) return;
+    for(unsigned v=0;v<MULTI_VARIANTS;++v){
+        unsigned impl=v%3, slots=v<3?1:MULTI_SLOTS;
+        for(unsigned s=0;s<slots;++s) assert(clear_impl(impl,&multi[v][s])==SQLITE_OK);
+    }
+    multi_ready=0;
 }
 static void warm_query_caches(const bench_case *c) {
     clear_query_caches();
@@ -91,9 +133,24 @@ static void warm_query_caches(const bench_case *c) {
     assert(ah==bh&&bh==zh&&zh==oh);
     query_ready=1;
 }
+static void warm_multi(const bench_case *c) {
+    clear_multi();
+    size_t ws=working_set(c); assert(ws);
+    for(unsigned v=0;v<MULTI_VARIANTS;++v){
+        unsigned impl=v%3, slots=v<3?1:MULTI_SLOTS;
+        for(unsigned s=0;s<slots;++s) init_impl(impl,&multi[v][s]);
+        for(size_t q=0;q<ws;++q){
+            const char *sql=working_sql(q); size_t len=strlen(sql);
+            drbz_query_result r=pack_impl(impl,&multi[v][q%slots],(const unsigned char *)sql,len);
+            assert(r.code==SQLITE_OK&&r.rows==1); (void)packed_checksum(&multi[v][q%slots]);
+        }
+    }
+    multi_ready=1;
+}
 static void reset(const bench_case *c, uint32_t seed) {
     parameter_seed=seed;
     if(c->task==2) warm_query_caches(c);
+    else if(c->task==3) warm_multi(c);
 }
 static uint64_t batch_query(const bench_case *c,unsigned variant,size_t n) {
     const char *sql=query_sql(c->detail); size_t len=strlen(sql); uint64_t checksum=0;
@@ -108,8 +165,18 @@ static uint64_t batch_query(const bench_case *c,unsigned variant,size_t n) {
     }
     return checksum;
 }
+static uint64_t batch_multi(const bench_case *c,unsigned variant,size_t n) {
+    size_t ws=working_set(c); unsigned impl=variant%3, slots=variant<3?1:MULTI_SLOTS; uint64_t checksum=0;
+    for(size_t i=0;i<n;++i){
+        size_t q=i%ws; const char *sql=working_sql(q); size_t len=strlen(sql); drbz_query_cache *cache=&multi[variant][q%slots];
+        drbz_query_result r=pack_impl(impl,cache,(const unsigned char *)sql,len); assert(r.code==SQLITE_OK&&r.rows==1);
+        checksum^=packed_checksum(cache)+UINT64_C(0x9e3779b97f4a7c15)+(checksum<<6)+(checksum>>2);
+    }
+    return checksum;
+}
 static uint64_t batch(const bench_case *c, unsigned variant, size_t n) {
     if(c->task==2) return batch_query(c,variant,n);
+    if(c->task==3) return batch_multi(c,variant,n);
     const char *sql="SELECT CAST(?1 AS TEXT)";
     if(c->detail&&variant<2){
         uint64_t checksum=0; int reuse=c->detail!=3,clear=c->detail==1;
@@ -166,8 +233,12 @@ int main(int argc,char **argv){
         {"sqlite/query-json-1",{"c_prepare_each","c_cached","zig_cached","odin_cached"},4,1,2,10,reset,batch,NULL},
         {"sqlite/query-json-64",{"c_prepare_each","c_cached","zig_cached","odin_cached"},4,64,2,11,reset,batch,NULL},
         {"sqlite/query-json-1024",{"c_prepare_each","c_cached","zig_cached","odin_cached"},4,1024,2,12,reset,batch,NULL},
+        {"sqlite/cache-ws1",{"c_single","zig_single","odin_single","c_fixed4","zig_fixed4","odin_fixed4"},6,1,3,20,reset,batch,NULL},
+        {"sqlite/cache-ws4",{"c_single","zig_single","odin_single","c_fixed4","zig_fixed4","odin_fixed4"},6,4,3,21,reset,batch,NULL},
+        {"sqlite/cache-ws16",{"c_single","zig_single","odin_single","c_fixed4","zig_fixed4","odin_fixed4"},6,16,3,22,reset,batch,NULL},
     };
-    bench_run(cases,sizeof cases/sizeof *cases,"sqlite-xMalloc",0,argc,argv); clear_query_caches();
+    bench_run(cases,sizeof cases/sizeof *cases,"sqlite-xMalloc",0,argc,argv);
+    clear_query_caches(); clear_multi();
 #ifdef DRBZ_PROFILE
     meter_begin();
 #endif
