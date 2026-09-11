@@ -1,156 +1,82 @@
-# Benchmark-driven migration roadmap
+# Benchmark-driven C / Zig / Odin migration roadmap
 
-PR #2 stays draft while these application and platform boundaries are incomplete.
-The rule for every optimization is simple: preserve a readable reference path,
-measure equal work, retain losses, and promote only when correctness, timing,
-allocation behavior and code size support the change on the relevant targets.
+PR #2 stays draft while platform and real DragonRuby renderer boundaries remain incomplete.
+Every optimization keeps a readable reference path, measures equal work, retains losses,
+and is promoted only when correctness, timing, allocation behavior and code size support it.
 Shared-runner measurements are observations, not universal performance claims.
 
-## 1. Persistent starfield to the real renderer boundary
+## Implemented and measured
 
-Implemented native shape:
+### Persistent starfield
 
-```text
-Ruby creates once
-  -> persistent caller-owned x[] / y[] / speed[] / packed sprite records
-  -> Zig SIMD update
-  -> optional pack/render adapter
-  -> one Ruby starfield draw dispatch
-```
+C, Zig and Odin share the same observable star-motion contract. Zig and Odin also have
+persistent caller-owned starfields with the same storage layout, deterministic RNG state,
+coordinate/full packing, and borrowed batch-sink contract. Their owned starfields specialize
+the known RNG path without changing the generic callback ABI.
 
-The current test sink deliberately consumes every packed record. It proves the
-native lifecycle and locates CPU cost, but it is not the proprietary DragonRuby
-renderer. The supported sample API exposes per-sprite `draw_sprite`, so the
-portable intermediate adapter uses one Ruby starfield object and performs the
-native update before issuing renderer calls. It does not invent an unavailable
-native batch-render API.
+Evidence separates update, full pack, coordinate-only pack and sink consumption at
+64 / 1,024 / 16,384 / 100,000 stars. Packing strategy remains an explicit candidate because
+coordinate-only packing wins on ARM but not consistently on x86. The public DragonRuby sample
+uses one native starfield object rather than one Ruby object per star; real proprietary GPU
+renderer validation remains a release gate.
 
-Current source-level experiments, each independently measured:
+### Cached query output
 
-- C `restrict` / Zig `noalias` for the already-documented disjoint SoA storage.
-- Hoist invariant width/height/path fields to initialization; hot packing writes
-  coordinates only.
-- Skip packing entirely in the per-sprite renderer adapter and draw from x/y SoA.
-- Consider 32/64-byte caller-storage alignment only after aligned/misaligned
-  measurements show a repeatable gain.
+C, Zig and Odin implement the same cached SQLite statement and packed first-column result
+contract. Warmed cached variants have matching allocator behavior and are benchmarked at
+1 / 64 / 1,024 rows. A fixed four-entry cache is also compared with a single-entry cache at
+working sets of 1 / 4 / 16 SQL texts.
 
-Required evidence remains 64 / 1,024 / 16,384 / 100,000 stars, separate update,
-pack and sink timings, allocation-symbol audit, exact state/checksums, and a
-matching proprietary SDK renderer execution before calling this end-to-end.
-
-Promotion gate: one native starfield object per Ruby starfield, no per-star Ruby
-state/data-object round trip, and no hidden packing or allocation cost that erases
-the measured kernel win.
-
-## 2. Cached Ruby `query_json`
-
-Original sample semantics are the reference: first column only, one Ruby string
-per row, SQL NULL represented by the Ruby string `"null"`. The replacement also
-preserves embedded NUL result bytes by using length-aware strings instead of the
-original C-string truncation.
-
-Current architecture:
-
-```text
-Ruby query_json(sql)
-  -> cached prepared SQLite statement keyed by exact SQL bytes
-  -> step rows directly
-  -> reusable native packed row buffer
-  -> reset statement
-  -> construct Ruby array/strings after SQLite borrowed values expire
-```
-
-Evidence includes native 1 / 64 / 1,024-row C-prepare-each / C-cached /
-Zig-cached comparisons, separate SQLite allocation profiling, and real pinned
-mruby cache-hit timings/allocation records for all six VM flavor/boxing builds.
-
-Next source-level target: if the matching DragonRuby host table exposes
-`mrb_ary_new_capa`, benchmark pre-sizing the result array from the already-known
-row count. Do not extend the production host ABI merely because upstream mruby
-has the function; proprietary SDK validation decides whether it is available.
-
-## 3. SQLite gains above SQLite, across languages
-
-Do not credit Zig with work that optimized C can also avoid. Compare architecture
-first, language second.
-
-Next experiments:
-
-1. One-statement cache versus small fixed/LRU caches with working sets of 1, 4
-   and 16 SQL texts.
-2. Packed-row buffer versus direct row consumer versus direct Ruby construction,
-   keeping SQLite borrowed-column lifetime rules explicit.
-3. Prepare/reprepare behavior across schema changes.
-4. Transaction-batched writes versus individual autocommit operations.
-5. C and Zig implementations receive matching cache/output policies.
-
-Report preparation, execution, result construction, Ruby allocation and SQLite
-allocator traffic separately. No combined number is allowed to masquerade as a
+The four-entry cache is promoted only for fitting working sets: at four alternating statements
+it removes the measured prepare/allocation traffic and is several times faster, while at 1 or
+16 statements it adds no useful architectural win. This is a cache-policy result, not a
 language-only speedup.
 
-## 4. Batch the nested-value reader
+### Nested Ruby values
 
-`drbz_sum_tree` intentionally avoids depending on mruby value layout. The new
-candidate decodes up to sixteen adjacent values per C/Zig callback while retaining
-a fixed traversal stack, strict evaluation order, cycle/depth rejection and
-transactional output. A nested descent discards and later re-decodes trailing
-siblings instead of retaining Ruby views in a large pending buffer.
+The host adapter compares direct C traversal, Zig one-value reader, Zig 16-value batched reader,
+and Ruby traversal while retaining strict depth-first floating-point order, fixed stack storage,
+cycle/depth rejection and transactional output. Odin implements the same single/batched C ABI
+and runs the same C traversal/greeting/worker tests through symbol remapping.
 
-The real-mruby benchmark pits four implementations against each other:
+### Newline kernels
 
-- Ruby traversal;
-- direct C traversal that depends on mruby's value layout;
-- Zig with one-value reader callbacks;
-- Zig with sixteen-value reader callbacks.
+Short inputs are swept exhaustively over lengths 0..512 at offsets 0/1/15 before any dispatcher
+threshold is installed. Larger C, Zig and Odin paths remain separate readable SIMD expressions.
+Odin's medium path accumulates up to 255 32-byte masks in u8 lanes, widens once to a 32-lane
+u16 vector and reduces once, avoiding both per-block horizontal reduction and target intrinsics.
+4 / 8 / 16 / 64 KiB and 1 MiB cases keep the crossover honest.
 
-Flat and nested 64-value workloads are measured separately. The direct-C result
-quantifies the cost of keeping Zig ABI-independent rather than pretending that
-abstraction is free.
+### Compiler/toolchain evidence
 
-## 5. Short newline dispatch
+C compiler experiments remain distinct from language comparisons: identical C sources are built
+with host Clang and zig cc across multiple optimization profiles and hosted Linux, Windows and
+macOS targets. Odin is pinned separately and has its own minimal / size / speed / aggressive
+profile experiment so compiler-profile choices cannot masquerade as language results.
 
-Keep simple short and long kernels rather than forcing one implementation to win
-all lengths. Sweep every length through 512 bytes, representative larger vector
-boundaries, and pointer offsets on x86 baseline/native, ARM native, Windows and
-both macOS runners. Choose a threshold only if a stable winning region exists.
+## Current implementation rules
 
-The preferred final shape is two readable microkernels plus one tiny length
-branch, not an ISA-intrinsic thicket.
+- No handwritten assembly or per-ISA intrinsic forests unless ordinary language/vector source hits
+  a demonstrated wall worth the maintenance cost.
+- No fast-math reassociation for results whose ordering is part of the contract.
+- `restrict` / `noalias` are used only where the public ABI already requires disjoint storage.
+- Generic callback ABIs remain available; owned objects may specialize known callbacks internally.
+- Timing and allocation instrumentation stay separate.
+- C, Zig and Odin get the same algorithmic opportunities before language comparisons are claimed.
+- Source mutation tests must compile and fail for the intended reason; a mutation that preserves
+  behavior is replaced rather than counted as evidence.
 
-## 6. Compiler/profile partitioning
+## Remaining application/platform work
 
-The Clang/zig-cc matrix shows there is no universal best `-O` profile. Some
-workloads run fastest at `-Oz` or `-O2`, and the winner changes by architecture.
-This creates a useful source-level option: compile independent kernel translation
-units with the compiler/profile that repeatedly wins on that target, while
-retaining one common source implementation.
+1. Validate the one-object starfield against a matching proprietary DragonRuby SDK and real renderer.
+2. Keep Ruby `query_json` allocation/result-construction evidence alongside native cache evidence;
+   explore result-capacity hints only if the real SDK exposes the needed mruby API.
+3. Extend SQLite cache/output experiments only where real working sets justify more policy.
+4. Keep the batched nested-value reader and short-LF dispatcher candidates benchmark-driven.
+5. Replace polling worker sleep with an interruptible SDL wait/wake adapter.
+6. Execute the new suite directly on Windows and macOS, not merely through compiler-only matrices.
+7. Validate Apple main-thread/framework, Steamworks and Android JNI boundaries in their real targets.
+8. Run whole-application allocation/render profiling with the matching DragonRuby SDK.
 
-Promotion requires repeated cross-runner stability, equal CPU target semantics,
-and code-size/build-time reporting. A per-kernel profile win is acceptable; a
-single cherry-picked shared-runner sample is not.
-
-For broad-distribution binaries, also test baseline/native multiversioning with
-one startup dispatch. Keep it only when the runtime gain justifies duplicated
-text size.
-
-## 7. C star code-size follow-up
-
-Sparse mixed-wrap repair made both implementations faster, but C machine code
-expanded more than Zig on ARM. The current experiment outlines C mixed repair
-using pointers to already-computed vector results/masks so baseline x86 does not
-change the vector-argument ABI. Keep it only if size falls without a material
-mixed-wrap regression.
-
-## 8. Platform adapters
-
-After the application-level work above:
-
-- SDL worker: interruptible wait/wake rather than polling sleep.
-- Windows/macOS execution for the new suite.
-- Apple main-thread/framework adapter.
-- Steamworks C++ boundary.
-- Android JNI lifetime/exception cleanup.
-- Matching proprietary DragonRuby SDK compilation/loading and real renderer run.
-
-The PR does not leave draft until platform/renderer claims are backed by the
-actual relevant environments rather than inferred from portable test hosts.
+The PR does not leave draft until the platform and renderer claims are backed by the actual
+relevant environments rather than inferred from portable test hosts.
