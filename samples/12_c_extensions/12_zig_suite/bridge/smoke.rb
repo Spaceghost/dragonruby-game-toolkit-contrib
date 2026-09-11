@@ -38,6 +38,38 @@ end
 raise 'scanner reset' unless FFI::Zig.reset_scanner.nil?
 20.times { raise 'scanner return' unless FFI::Zig.update_scanner_texture.nil? }
 
+class ZigSuiteDrawSink
+  attr_reader :calls, :checksum
+  def initialize
+    @calls = 0
+    @checksum = 0
+  end
+  def draw_sprite(x, y, w, h, path)
+    raise 'star size' unless w == 4.0 && h == 4.0
+    raise 'star path' unless path == 'sprites/tiny-star.png'
+    raise 'star coordinate' unless x.is_a?(Numeric) && y.is_a?(Numeric)
+    @calls += 1
+    @checksum = (@checksum + x.to_i + y.to_i) & 0x3fffffff
+    nil
+  end
+end
+begin
+  FFI::Zig.starfield_draw(ZigSuiteDrawSink.new, 'sprites/tiny-star.png')
+  raise 'expected uninitialized starfield error'
+rescue RuntimeError
+end
+FFI::Zig.starfield_reset(64)
+draw_sink = ZigSuiteDrawSink.new
+2.times { FFI::Zig.starfield_draw(draw_sink, 'sprites/tiny-star.png') }
+raise 'one-object starfield did not draw all stars' unless draw_sink.calls == 128
+raise 'starfield draw checksum stayed empty' if draw_sink.checksum == 0
+FFI::Zig.starfield_clear
+begin
+  FFI::Zig.starfield_draw(draw_sink, 'sprites/tiny-star.png')
+  raise 'expected cleared starfield error'
+rescue RuntimeError
+end
+
 FFI::Zig.sqlite_open(':memory:')
 FFI::Zig.sqlite_exec("create table q(v text); insert into q values ('{\"id\":1}'), (NULL), ('a'||char(0)||'b')")
 sql = 'select v from q order by rowid'
