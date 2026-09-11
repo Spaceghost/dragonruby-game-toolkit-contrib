@@ -9,12 +9,12 @@
 
 void original_c_stars(drbz_star *, size_t, drbz_random, void *);
 static uint64_t count_checks, star_values, rng_checks, guarded_checks;
-static const char *names[] = {"zig_previous", "c_tuned", "zig_tuned"};
+static const char *names[] = {"zig_previous", "c_tuned", "zig_tuned", "odin_tuned"};
 static size_t (*const counters[])(const unsigned char *, size_t) = {
-    drbz_count_blocked, drbc_count_dual, drbz_count_dual
+    drbz_count_blocked, drbc_count_dual, drbz_count_dual, drbo_count_dual
 };
 static void (*const motions[])(float *, float *, const float *, size_t, rival_random, void *) = {
-    drbz_stars_soa, drbc_stars_block, drbz_stars_block
+    drbz_stars_soa, drbc_stars_block, drbz_stars_block, drbo_stars_block
 };
 struct rng { uint32_t state; uint64_t calls; };
 static uint32_t next(uint32_t *s) { return *s = *s * UINT32_C(1664525) + UINT32_C(1013904223); }
@@ -28,7 +28,7 @@ static size_t scalar_count(const unsigned char *p, size_t n) {
     return count;
 }
 static void count_case(const unsigned char *p, size_t n, size_t expected) {
-    for (size_t v = 0; v < 3; ++v) {
+    for (size_t v = 0; v < sizeof counters / sizeof *counters; ++v) {
         size_t result = counters[v](p, n);
         if (result != expected) {
             fprintf(stderr, "RIVAL_COUNT_MISMATCH candidate=%s length=%zu expected=%zu got=%zu\n", names[v], n, expected, result);
@@ -62,7 +62,7 @@ static void counts(void) {
     for (size_t n = 0; n <= page.size; ++n) {
         count_case(page.data, n, scalar_count(page.data, n));
         count_case(page.data + page.size - n, n, scalar_count(page.data + page.size - n, n));
-        guarded_checks += 6;
+        guarded_checks += 2 * (sizeof counters / sizeof *counters);
     }
     guard_destroy(page);
 }
@@ -73,7 +73,7 @@ static void stars_case(const drbz_star *input, size_t n) {
     memcpy(expected, input, n * sizeof *input);
     struct rng reference = {72819, 0};
     original_c_stars(expected, n, random_value, &reference);
-    for (size_t v = 0; v < 3; ++v) {
+    for (size_t v = 0; v < sizeof motions / sizeof *motions; ++v) {
         float x[1026], y[1026], speed[1026];
         x[0] = y[0] = speed[0] = x[n+1] = y[n+1] = speed[n+1] = 12345.0f;
         for (size_t i = 0; i < n; ++i) { x[i+1] = input[i].x; y[i+1] = input[i].y; speed[i+1] = input[i].s; }
@@ -95,7 +95,7 @@ static void stars_case(const drbz_star *input, size_t n) {
 }
 static void stars(void) {
     drbz_star input[1024];
-    for (size_t v = 0; v < 3; ++v) motions[v](NULL,NULL,NULL,0,random_value,NULL);
+    for (size_t v = 0; v < sizeof motions / sizeof *motions; ++v) motions[v](NULL,NULL,NULL,0,random_value,NULL);
     for (unsigned mask = 0; mask < 65536; ++mask) {
         for (size_t i = 0; i < 8; ++i)
             input[i] = (drbz_star){mask & (1u<<i) ? 1280.0f : 0.0f, mask & (1u<<(i+8)) ? 720.0f : 0.0f, 1.0f};
@@ -120,7 +120,7 @@ static void stars(void) {
     struct guarded_page gx=guard_create(), gy=guard_create(), gs=guard_create();
     for (size_t i=0; i<gs.size/sizeof(float); ++i) ((float *)gs.data)[i]=1.0f;
     guard_readonly(gs);
-    for (size_t n=1; n<=65; ++n) for (size_t v=0; v<3; ++v) {
+    for (size_t n=1; n<=65; ++n) for (size_t v=0; v<sizeof motions/sizeof *motions; ++v) {
         float *x=(float *)(gx.data+gx.size)-n, *y=(float *)(gy.data+gy.size)-n;
         const float *s=(const float *)(gs.data+gs.size)-n;
         memset(x,0,n*sizeof *x); memset(y,0,n*sizeof *y);
