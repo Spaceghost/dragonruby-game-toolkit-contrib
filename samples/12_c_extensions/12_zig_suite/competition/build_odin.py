@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Build the pinned Odin competitor as a C-ABI object for the shared harness."""
+"""Build the pinned Odin native package as one C-ABI object for shared harnesses."""
 from __future__ import annotations
 import argparse, hashlib, json, pathlib, subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent
-SOURCE = ROOT.parent / "src" / "competitive.odin"
+SOURCE_DIR = ROOT.parent / "src"
 OUT = ROOT / "odin-out" / "competitive.o"
 PIN = {"version": "dev-2026-09", "commit": "a2fb372b76e81ef31fbbc8a2cf2b4fdf5ac6c924"}
+
+
+def hash_sources() -> dict[str, str]:
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(SOURCE_DIR.glob("*.odin"))}
 
 
 def main() -> None:
@@ -18,7 +22,7 @@ def main() -> None:
         raise SystemExit(f"expected Odin {PIN['version']}, got {version!r}")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     command = [
-        "odin", "build", str(SOURCE), "-file", "-build-mode:obj", "-no-entry-point",
+        "odin", "build", str(SOURCE_DIR), "-build-mode:obj", "-no-entry-point",
         "-reloc-mode:pic", "-o:speed", "-no-bounds-check", f"-out:{OUT}",
     ]
     if args.cpu == "native":
@@ -29,7 +33,7 @@ def main() -> None:
         "reported_version": version,
         "cpu": args.cpu,
         "command": command,
-        "source_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
+        "source_sha256": hash_sources(),
         "object_sha256": hashlib.sha256(OUT.read_bytes()).hexdigest(),
         "object_bytes": OUT.stat().st_size,
     }
