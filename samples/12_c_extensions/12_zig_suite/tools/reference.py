@@ -15,8 +15,16 @@ def blob(data: bytes) -> str:
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
 
 
+def canonical_source(data: bytes) -> bytes:
+    # Git blob pins are defined for the repository's LF content. Windows
+    # checkouts may materialize CRLF, which must not make reviewed source look
+    # different. Bare CR is intentionally left alone so an actual source change
+    # still fails the pin.
+    return data.replace(b'\r\n', b'\n')
+
+
 def read_pinned(path: str, expected: str) -> str:
-    data = Path(path).read_bytes()
+    data = canonical_source(Path(path).read_bytes())
     actual = blob(data)
     if actual != expected:
         raise SystemExit(f'Unreviewed original source: {path}: {actual} != {expected}')
