@@ -12,4 +12,8 @@ size_t drbc_count_dual(const unsigned char *, size_t);
 size_t drbz_count_dual(const unsigned char *, size_t);
 void drbc_stars_block(float *, float *, const float *, size_t, rival_random, void *);
 void drbz_stars_block(float *, float *, const float *, size_t, rival_random, void *);
+/* Public scalar fallback keeps exact RNG ordering and intentionally crosses an
+ * ABI boundary so LLVM cannot specialize the common count=8 call into a large
+ * unrolled ARM helper. It is also usable directly by embeddings. */
+void drbz_stars_scalar_fallback(float *, float *, const float *, size_t, rival_random, void *);
 #endif
