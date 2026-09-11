@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef DRBZ_SQLITE_QUERY
 #include <sqlite3.h>
@@ -20,11 +21,9 @@ static drbz_scanner scanner;
 static void argument_error(mrb_state *mrb, const char *message) {
     api->mrb_raise(mrb, api->mrb_class_get(mrb, "ArgumentError"), message);
 }
-#ifdef DRBZ_SQLITE_QUERY
 static void runtime_error(mrb_state *mrb, const char *message) {
     api->mrb_raise(mrb, api->mrb_class_get(mrb, "RuntimeError"), message);
 }
-#endif
 static mrb_value square_value(mrb_state *mrb, mrb_value self) {
     (void)self;
     mrb_int input;
@@ -167,6 +166,62 @@ static mrb_value frame(mrb_state *mrb, mrb_value self) {
     return mrb_nil_value();
 }
 
+/* One native starfield replaces N Ruby Star data objects. The current supported
+ * renderer boundary still exposes draw_sprite one sprite at a time, so this
+ * adapter deliberately performs one Ruby -> native draw dispatch, updates all
+ * stars first, then calls draw_sprite from C. No Ruby call unwinds through Zig.
+ * Width/height and path are shared mrb_values for the whole frame, and the
+ * packed-sprite pass is skipped entirely for this renderer path. */
+static void *starfield_storage;
+static drbz_starfield bridge_starfield;
+static int starfield_ready;
+static mrb_sym draw_sprite_sym;
+static void starfield_clear_native(void) {
+    free(starfield_storage);
+    starfield_storage = NULL;
+    memset(&bridge_starfield, 0, sizeof bridge_starfield);
+    starfield_ready = 0;
+}
+static mrb_value starfield_reset_value(mrb_state *mrb, mrb_value self) {
+    (void)self;
+    mrb_int count;
+    api->mrb_get_args(mrb, "i", &count);
+    if (count < 0) { argument_error(mrb, "star count must be nonnegative"); return mrb_nil_value(); }
+    size_t n = (size_t)count;
+    size_t bytes = drbz_starfield_storage_bytes(n);
+    if (n != 0 && bytes == 0) { argument_error(mrb, "starfield storage size overflow"); return mrb_nil_value(); }
+    void *next_storage = bytes ? malloc(bytes) : NULL;
+    if (bytes && !next_storage) { runtime_error(mrb, "starfield allocation failed"); return mrb_nil_value(); }
+    drbz_starfield next;
+    int rc = drbz_starfield_init(next_storage, bytes, n, UINT64_C(0x91e10da5c79e7b1d) ^ (uint64_t)n, &next);
+    if (rc != 0) { free(next_storage); runtime_error(mrb, "starfield initialization failed"); return mrb_nil_value(); }
+    free(starfield_storage);
+    starfield_storage = next_storage;
+    bridge_starfield = next;
+    starfield_ready = 1;
+    return mrb_nil_value();
+}
+static mrb_value starfield_draw_value(mrb_state *mrb, mrb_value self) {
+    (void)self;
+    mrb_value ffi_draw, path;
+    api->mrb_get_args(mrb, "oo", &ffi_draw, &path);
+    if (!starfield_ready) { runtime_error(mrb, "call starfield_reset before starfield_draw"); return mrb_nil_value(); }
+    drbz_starfield_update(&bridge_starfield);
+    const mrb_value width = api->drb_float_value(mrb, 4.0);
+    const mrb_value height = api->drb_float_value(mrb, 4.0);
+    for (size_t i = 0; i < bridge_starfield.len; ++i) {
+        const mrb_value x = api->drb_float_value(mrb, bridge_starfield.x[i]);
+        const mrb_value y = api->drb_float_value(mrb, bridge_starfield.y[i]);
+        (void)api->mrb_funcall_id(mrb, ffi_draw, draw_sprite_sym, 5, x, y, width, height, path);
+    }
+    return mrb_nil_value();
+}
+static mrb_value starfield_clear_value(mrb_state *mrb, mrb_value self) {
+    (void)self; api->mrb_get_args(mrb, "");
+    starfield_clear_native();
+    return mrb_nil_value();
+}
+
 #ifdef DRBZ_SQLITE_QUERY
 static sqlite3 *query_db;
 static drbz_query_cache query_cache;
@@ -278,6 +333,7 @@ static mrb_value query_hits_value(mrb_state *mrb, mrb_value self) { (void)self; 
 
 DRB_FFI_EXPORT void drb_register_c_extensions(mrb_state *mrb, drb_api_t *host) {
     api = host; drbz_scanner_reset(&scanner);
+    draw_sprite_sym = api->mrb_intern_cstr(mrb, "draw_sprite");
     struct RClass *ffi = api->mrb_module_get(mrb, "FFI");
     struct RClass *zig = api->mrb_define_module_under(mrb, ffi, "Zig");
     api->mrb_define_module_function(mrb, zig, "square", square_value, MRB_ARGS_REQ(1));
@@ -292,6 +348,9 @@ DRB_FFI_EXPORT void drb_register_c_extensions(mrb_state *mrb, drb_api_t *host) {
     api->mrb_define_module_function(mrb, zig, "goodbye", goodbye, MRB_ARGS_REQ(1));
     api->mrb_define_module_function(mrb, zig, "reset_scanner", reset, MRB_ARGS_NONE());
     api->mrb_define_module_function(mrb, zig, "update_scanner_texture", frame, MRB_ARGS_NONE());
+    api->mrb_define_module_function(mrb, zig, "starfield_reset", starfield_reset_value, MRB_ARGS_REQ(1));
+    api->mrb_define_module_function(mrb, zig, "starfield_draw", starfield_draw_value, MRB_ARGS_REQ(2));
+    api->mrb_define_module_function(mrb, zig, "starfield_clear", starfield_clear_value, MRB_ARGS_NONE());
 #ifdef DRBZ_SQLITE_QUERY
     api->mrb_define_module_function(mrb, zig, "sqlite_open", sqlite_open_value, MRB_ARGS_REQ(1));
     api->mrb_define_module_function(mrb, zig, "sqlite_exec", sqlite_exec_value, MRB_ARGS_REQ(1));
