@@ -22,11 +22,9 @@ size_t drbc_count_dual(const unsigned char *bytes, size_t length) {
             bytes32 a, b;
             memcpy(&a, bytes + offset, sizeof a);
             memcpy(&b, bytes + offset + 32, sizeof b);
-            /* Comparison masks are all-ones: subtraction adds one per hit. */
             even -= (bytes32)(a == newline);
             odd -= (bytes32)(b == newline);
         }
-        /* Each lane <= 255; the widened pair sum <= 510; total <= 16320. */
         wide32 counts = __builtin_convertvector(even, wide32)
                       + __builtin_convertvector(odd, wide32);
         total += __builtin_reduce_add(counts);
@@ -34,11 +32,9 @@ size_t drbc_count_dual(const unsigned char *bytes, size_t length) {
     while (length - offset >= 32) {
         bytes32 value;
         memcpy(&value, bytes + offset, sizeof value);
-        /* At most 32 hits here, so a byte reduction cannot overflow. */
         total += __builtin_reduce_add((bytes32)(value == newline) & (bytes32)1);
         offset += 32;
     }
-    /* Bounded loads, never an overlapping or out-of-range tail read. */
     if (length - offset >= 16) {
         bytes16 value;
         memcpy(&value, bytes + offset, sizeof value);
@@ -55,7 +51,6 @@ size_t drbc_count_dual(const unsigned char *bytes, size_t length) {
     return total;
 }
 
-/* Compact ordered exceptional loop. */
 static __attribute__((noinline)) void
 scalar_block(float *x, float *y, const float *speed, size_t count,
              rival_random random, void *context) {
@@ -67,8 +62,6 @@ scalar_block(float *x, float *y, const float *speed, size_t count,
     }
 }
 
-/* Continue scalar while every star wraps both axes. This turns a sustained
- * all-wrap region into one ordered run instead of one helper call per block. */
 static __attribute__((noinline)) size_t
 dense_both_wrap_run(float *x, float *y, const float *speed, size_t count,
                     rival_random random, void *context) {
@@ -81,6 +74,21 @@ dense_both_wrap_run(float *x, float *y, const float *speed, size_t count,
         y[i] = random(context) * -720.0f;
     }
     return i;
+}
+
+/* Keep the mixed exceptional work out of the vector-search loop. Passing the
+ * already-computed results/masks avoids repeated arithmetic; one outlined copy
+ * may also reduce ARM code size. CI keeps this only if the measured tradeoff is
+ * worthwhile rather than assuming noinline is magic. */
+static __attribute__((noinline)) void
+mixed_repair(float *x, float *y, floats8 nx, floats8 ny,
+             masks8 wrap_x, masks8 wrap_y, rival_random random, void *context) {
+    memcpy(x, &nx, sizeof nx);
+    memcpy(y, &ny, sizeof ny);
+    for (size_t lane = 0; lane < 8; ++lane) {
+        if (wrap_x[lane]) x[lane] = random(context) * -1280.0f;
+        if (wrap_y[lane]) y[lane] = random(context) * -720.0f;
+    }
 }
 
 void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
@@ -107,17 +115,7 @@ void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
             i += consumed;
             continue;
         }
-
-        /* Mixed blocks already have their vector results. Publish them once and
-         * repair only wrapped coordinates. The RNG contract gives the callback
-         * only its own state, so clean-lane stores cannot affect it. Iterating
-         * lanes in order preserves star order and x-before-y RNG consumption. */
-        memcpy(x + i, &nx, sizeof nx);
-        memcpy(y + i, &ny, sizeof ny);
-        for (size_t lane = 0; lane < 8; ++lane) {
-            if (wrap_x[lane]) x[i + lane] = random(context) * -1280.0f;
-            if (wrap_y[lane]) y[i + lane] = random(context) * -720.0f;
-        }
+        mixed_repair(x + i, y + i, nx, ny, wrap_x, wrap_y, random, context);
         i += 8;
     }
     if (i < count) scalar_block(x + i, y + i, speed + i, count - i, random, context);
