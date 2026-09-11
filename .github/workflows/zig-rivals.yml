@@ -73,6 +73,12 @@ jobs:
         run: |
           python3 run.py --cpu "$ZIG_CPU" --output "$RUNNER_TEMP/rivals"
           cat "$RUNNER_TEMP/rivals/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Sweep every short newline length before choosing a dispatcher
+        run: |
+          set -euo pipefail
+          ./zig-out/bin/lf-sweep > "$RUNNER_TEMP/rivals/lf-sweep.jsonl"
+          python3 lf_sweep.py "$RUNNER_TEMP/rivals/lf-sweep.jsonl" "$RUNNER_TEMP/rivals" | tee "$RUNNER_TEMP/rivals/lf-sweep.stdout"
+          cat "$RUNNER_TEMP/rivals/lf-sweep-report.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain raw results, code sizes and disassembly
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
