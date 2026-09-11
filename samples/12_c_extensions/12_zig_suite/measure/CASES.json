@@ -25,7 +25,10 @@
     "sqlite/direct-prepare-each": ["c_direct", "zig_direct"],
     "sqlite/query-json-1": ["c_prepare_each", "c_cached", "zig_cached", "odin_cached"],
     "sqlite/query-json-64": ["c_prepare_each", "c_cached", "zig_cached", "odin_cached"],
-    "sqlite/query-json-1024": ["c_prepare_each", "c_cached", "zig_cached", "odin_cached"]
+    "sqlite/query-json-1024": ["c_prepare_each", "c_cached", "zig_cached", "odin_cached"],
+    "sqlite/cache-ws1": ["c_single", "zig_single", "odin_single", "c_fixed4", "zig_fixed4", "odin_fixed4"],
+    "sqlite/cache-ws4": ["c_single", "zig_single", "odin_single", "c_fixed4", "zig_fixed4", "odin_fixed4"],
+    "sqlite/cache-ws16": ["c_single", "zig_single", "odin_single", "c_fixed4", "zig_fixed4", "odin_fixed4"]
   },
   "ruby": {
     "ruby/lf/128": ["ruby_byte_loop", "ffi_zig"],
