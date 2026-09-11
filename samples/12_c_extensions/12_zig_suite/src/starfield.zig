@@ -107,8 +107,8 @@ fn testSink(raw: ?*anyopaque, sprites: [*c]const Sprite, count: usize) callconv(
     const seen: *usize = @ptrCast(@alignCast(raw.?));
     for (0..count) |i| {
         std.debug.assert(sprites[i].w == 4 and sprites[i].h == 4 and sprites[i].path_id == 1);
-        seen.* +%= @as(usize, @bitCast(sprites[i].x));
-        seen.* +%= @as(usize, @bitCast(sprites[i].y));
+        seen.* +%= @as(usize, @as(u32, @bitCast(sprites[i].x)));
+        seen.* +%= @as(usize, @as(u32, @bitCast(sprites[i].y)));
     }
 }
 
