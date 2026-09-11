@@ -20,15 +20,18 @@ pub fn countDual(bytes: []const u8) usize {
             even +%= @select(u8, a == newline, one, zero);
             odd +%= @select(u8, b == newline, one, zero);
         }
+        // Each lane <= 255; widened pair <= 510; the reduction <= 16320.
         const wide_even: @Vector(32, u16) = @intCast(even);
         const wide_odd: @Vector(32, u16) = @intCast(odd);
         total += @reduce(.Add, wide_even + wide_odd);
     }
     while (bytes.len - offset >= 32) {
         const value: V = bytes[offset..][0..32].*;
+        // One block has at most 32 hits, so byte reduction is exact.
         total += @reduce(.Add, @select(u8, value == newline, one, zero));
         offset += 32;
     }
+    // Two bounded vector fragments leave at most seven scalar tail bytes.
     inline for (.{ 16, 8 }) |width| {
         if (bytes.len - offset >= width) {
             const Tail = @Vector(width, u8);
@@ -96,7 +99,26 @@ pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, contex
             i += consumed;
             continue;
         }
-        drbz_stars_scalar_fallback(x.ptr + i, y.ptr + i, speed.ptr + i, 8, random, context);
+
+        // Mixed blocks already paid for nx/ny. Publish those vector results,
+        // then repair only lanes that wrapped. The callback contract requires
+        // RNG state to be independent of these arrays, so this retains the
+        // observable RNG sequence while avoiding eight repeated scalar adds and
+        // an ABI call per exceptional block. ctz visits stars in ascending order;
+        // x is still consumed before y for a star that wraps both axes.
+        x[i..][0..8].* = nx;
+        y[i..][0..8].* = ny;
+        const x_bits: u8 = @bitCast(wrap_x);
+        const y_bits: u8 = @bitCast(wrap_y);
+        var wrapped = x_bits | y_bits;
+        while (wrapped != 0) {
+            const lane: u3 = @intCast(@ctz(wrapped));
+            const bit = @as(u8, 1) << lane;
+            const index = i + @as(usize, lane);
+            if (x_bits & bit != 0) x[index] = random(context) * -1280;
+            if (y_bits & bit != 0) y[index] = random(context) * -720;
+            wrapped &= wrapped - 1;
+        }
         i += 8;
     }
     if (i < x.len) drbz_stars_scalar_fallback(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
