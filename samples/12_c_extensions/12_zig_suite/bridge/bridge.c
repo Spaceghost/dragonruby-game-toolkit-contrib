@@ -20,9 +20,11 @@ static drbz_scanner scanner;
 static void argument_error(mrb_state *mrb, const char *message) {
     api->mrb_raise(mrb, api->mrb_class_get(mrb, "ArgumentError"), message);
 }
+#ifdef DRBZ_SQLITE_QUERY
 static void runtime_error(mrb_state *mrb, const char *message) {
     api->mrb_raise(mrb, api->mrb_class_get(mrb, "RuntimeError"), message);
 }
+#endif
 static mrb_value square_value(mrb_state *mrb, mrb_value self) {
     (void)self;
     mrb_int input;
@@ -128,10 +130,6 @@ static unsigned char *copy_c_string(mrb_state *mrb, const char *text, mrb_int le
         argument_error(mrb, message);
         return NULL;
     }
-    if ((uint64_t)length >= UINT64_MAX) {
-        argument_error(mrb, "string is too large for SQLite");
-        return NULL;
-    }
     unsigned char *copy = sqlite3_malloc64((sqlite3_uint64)length + 1);
     if (!copy) {
         runtime_error(mrb, "SQLite string allocation failed");
@@ -205,9 +203,8 @@ static mrb_value query_json_value(mrb_state *mrb, mrb_value self) {
         if (packed_length - position < sizeof(uint64_t)) { runtime_error(mrb, "invalid packed query result"); return mrb_nil_value(); }
         uint64_t row_length; memcpy(&row_length, packed + position, sizeof row_length); position += sizeof row_length;
         mrb_value value;
-        if (row_length == UINT64_MAX) {
-            value = api->mrb_str_new(mrb, "null", 4);
-        } else {
+        if (row_length == UINT64_MAX) value = api->mrb_str_new(mrb, "null", 4);
+        else {
             if (row_length > (uint64_t)(packed_length - position) || row_length > (uint64_t)MRB_INT_MAX) { runtime_error(mrb, "invalid packed query row length"); return mrb_nil_value(); }
             value = api->mrb_str_new(mrb, (const char *)(packed + position), (mrb_int)row_length);
             position += (size_t)row_length;
@@ -231,8 +228,7 @@ static mrb_value query_hits_value(mrb_state *mrb, mrb_value self) { (void)self; 
 #endif
 
 DRB_FFI_EXPORT void drb_register_c_extensions(mrb_state *mrb, drb_api_t *host) {
-    api = host;
-    drbz_scanner_reset(&scanner);
+    api = host; drbz_scanner_reset(&scanner);
     struct RClass *ffi = api->mrb_module_get(mrb, "FFI");
     struct RClass *zig = api->mrb_define_module_under(mrb, ffi, "Zig");
     api->mrb_define_module_function(mrb, zig, "square", square_value, MRB_ARGS_REQ(1));
