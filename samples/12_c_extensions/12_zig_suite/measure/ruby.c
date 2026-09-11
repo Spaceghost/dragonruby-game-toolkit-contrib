@@ -85,8 +85,6 @@ static void reset(const bench_case *c, uint32_t seed) {
     mrb_gc_arena_restore(vm, 0);
     mrb_full_gc(vm);
     if (c->task >= 6 && c->task <= 8) {
-        /* The native cache owns one statement. Warm this case's SQL after all
-         * other reset work so timed samples are explicit cache-hit workloads. */
         int arena = mrb_gc_arena_save(vm);
         mrb_value warm = mrb_funcall(vm, receiver, methods[c->task][0], 1, mrb_fixnum_value(1));
         check_vm(); assert(mrb_fixnum_p(warm));
@@ -122,6 +120,7 @@ int main(int argc, char **argv) {
         .drb_upload_pixel_array = upload, .mrb_raise = mrb_raise, .mrb_class_get = mrb_class_get,
         .drb_float_value = make_float, .mrb_str_new = mrb_str_new,
         .mrb_ary_new = mrb_ary_new, .mrb_ary_push = mrb_ary_push,
+        .mrb_intern_cstr = mrb_intern_cstr, .mrb_funcall_id = mrb_funcall_id,
     };
     drb_register_c_extensions(vm, &api);
     FILE *script = fopen(argv[1], "rb"); assert(script); mrb_load_file(vm, script); fclose(script); check_vm();
