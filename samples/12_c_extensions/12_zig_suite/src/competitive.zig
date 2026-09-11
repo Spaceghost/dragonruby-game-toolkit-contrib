@@ -42,35 +42,40 @@ pub fn countDual(bytes: []const u8) usize {
     return total;
 }
 
-// These three storage ranges are contractually disjoint. `noalias` is therefore
-// an executable optimizer contract, not a benchmark-only assumption. The RNG
-// callback likewise may not inspect or mutate them through hidden aliases.
-export fn drbz_stars_scalar_fallback(noalias x: [*c]f32, noalias y: [*c]f32, noalias speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
+const CallbackContext = struct { random: Random, context: ?*anyopaque };
+fn callbackRandom(context: *CallbackContext) f32 { return context.random(context.context); }
+
+fn scalarRange(noalias x: [*]f32, noalias y: [*]f32, noalias speed: [*]const f32,
+               count: usize, context: anytype, comptime randomFn: anytype) void {
     @setFloatMode(.strict);
-    if (count == 0) return;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         x[i] += speed[i];
-        if (x[i] > 1280) x[i] = random(context) * -1280;
+        if (x[i] > 1280) x[i] = randomFn(context) * -1280;
         y[i] += speed[i];
-        if (y[i] > 720) y[i] = random(context) * -720;
+        if (y[i] > 720) y[i] = randomFn(context) * -720;
     }
 }
 
-noinline fn denseBothWrapRun(noalias x: [*]f32, noalias y: [*]f32, noalias speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) usize {
+noinline fn denseBothWrapRunWith(noalias x: [*]f32, noalias y: [*]f32, noalias speed: [*]const f32,
+                                 count: usize, context: anytype, comptime randomFn: anytype) usize {
     @setFloatMode(.strict);
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const nx = x[i] + speed[i];
         const ny = y[i] + speed[i];
         if (!(nx > 1280 and ny > 720)) break;
-        x[i] = random(context) * -1280;
-        y[i] = random(context) * -720;
+        x[i] = randomFn(context) * -1280;
+        y[i] = randomFn(context) * -720;
     }
     return i;
 }
 
-pub fn starsBlock(noalias x: []f32, noalias y: []f32, noalias speed: []const f32, random: Random, context: ?*anyopaque) void {
+// One algorithm, specialized by RNG strategy. Generic embeddings instantiate it
+// with the callback adapter below; owned starfields can pass their RNG directly
+// so wrap-heavy paths do not cross an indirect function pointer per coordinate.
+pub fn starsBlockWith(noalias x: []f32, noalias y: []f32, noalias speed: []const f32,
+                      context: anytype, comptime randomFn: anytype) void {
     @setFloatMode(.strict);
     const V = @Vector(8, f32);
     const max_x: V = @splat(1280);
@@ -91,7 +96,7 @@ pub fn starsBlock(noalias x: []f32, noalias y: []f32, noalias speed: []const f32
             continue;
         }
         if (@reduce(.And, wrap_x & wrap_y)) {
-            const consumed = denseBothWrapRun(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
+            const consumed = denseBothWrapRunWith(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, context, randomFn);
             i += consumed;
             continue;
         }
@@ -104,13 +109,27 @@ pub fn starsBlock(noalias x: []f32, noalias y: []f32, noalias speed: []const f32
             const lane: u3 = @intCast(@ctz(wrapped));
             const bit = @as(u8, 1) << lane;
             const index = i + @as(usize, lane);
-            if (x_bits & bit != 0) x[index] = random(context) * -1280;
-            if (y_bits & bit != 0) y[index] = random(context) * -720;
+            if (x_bits & bit != 0) x[index] = randomFn(context) * -1280;
+            if (y_bits & bit != 0) y[index] = randomFn(context) * -720;
             wrapped &= wrapped - 1;
         }
         i += 8;
     }
-    if (i < x.len) drbz_stars_scalar_fallback(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
+    if (i < x.len) scalarRange(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, context, randomFn);
+}
+
+// These three storage ranges are contractually disjoint. `noalias` is therefore
+// an executable optimizer contract, not a benchmark-only assumption. The RNG
+// callback likewise may not inspect or mutate them through hidden aliases.
+export fn drbz_stars_scalar_fallback(noalias x: [*c]f32, noalias y: [*c]f32, noalias speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
+    if (count == 0) return;
+    var callback = CallbackContext{ .random = random, .context = context };
+    scalarRange(x, y, speed, count, &callback, callbackRandom);
+}
+
+pub fn starsBlock(noalias x: []f32, noalias y: []f32, noalias speed: []const f32, random: Random, context: ?*anyopaque) void {
+    var callback = CallbackContext{ .random = random, .context = context };
+    starsBlockWith(x, y, speed, &callback, callbackRandom);
 }
 
 export fn drbz_count_dual(bytes: [*c]const u8, length: usize) usize {
