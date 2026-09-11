@@ -4,6 +4,7 @@ import "base:intrinsics"
 import "core:simd"
 
 Random :: proc "c" (ctx: rawptr) -> f32
+Wide_Counts :: #simd[32]u16
 
 load_u8x32 :: #force_inline proc "contextless" (p: [^]u8) -> simd.u8x32 {
 	return intrinsics.unaligned_load(cast(^simd.u8x32)p)
@@ -17,10 +18,10 @@ store_f32x8 :: #force_inline proc "contextless" (p: [^]f32, v: simd.f32x8) {
 	intrinsics.unaligned_store(cast(^simd.f32x8)p, v)
 }
 
-// Accumulate up to 255 32-byte blocks before reducing. Each u8 lane therefore
-// remains exact (<=255), while the scalar 32-lane widening cost is paid once per
-// ~8 KiB instead of once per block. This is deliberately ordinary Odin SIMD,
-// not a target-specific horizontal-sum intrinsic.
+// Accumulate up to 255 32-byte blocks in u8 lanes, widen once to u16, and let
+// Odin's generic SIMD reduction handle all 32 lanes. The widened total is at
+// most 8160, so u16 is exact. This retains the source-level SIMD abstraction and
+// removes the scalar widening tree that was the measured medium-input bottleneck.
 count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
 	newline: simd.u8x32 = u8('\n')
 	one: simd.u8x32 = u8(1)
@@ -36,8 +37,8 @@ count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #n
 			acc += simd.lanes_eq(value, newline) & one
 			offset += 32
 		}
-		lanes := simd.to_array(acc)
-		for lane in 0..<32 { total += uintptr(lanes[lane]) }
+		wide := cast(Wide_Counts)acc
+		total += uintptr(simd.reduce_add_bisect(wide))
 	}
 	for offset < length {
 		if bytes[offset] == u8('\n') { total += 1 }
@@ -68,9 +69,8 @@ drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr #no_bound
 			odd += simd.lanes_eq(b, newline) & one
 			offset += 64
 		}
-		ea := simd.to_array(even)
-		oa := simd.to_array(odd)
-		for lane in 0..<32 { total += uintptr(ea[lane]) + uintptr(oa[lane]) }
+		wide := cast(Wide_Counts)even + cast(Wide_Counts)odd
+		total += uintptr(simd.reduce_add_bisect(wide))
 	}
 	if offset < length { total += count_medium(bytes[offset:], length - offset) }
 	return total
