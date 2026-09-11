@@ -2,7 +2,7 @@ package rivals
 
 import "core:simd"
 
-Random :: proc "c" (context: rawptr) -> f32
+Random :: proc "c" (ctx: rawptr) -> f32
 
 load_u8x32 :: proc "contextless" (p: [^]u8) -> simd.u8x32 {
 	return simd.from_array(cast(^[32]u8)(p)^)
@@ -13,7 +13,10 @@ load_f32x8 :: proc "contextless" (p: [^]f32) -> simd.f32x8 {
 }
 
 store_f32x8 :: proc "contextless" (p: [^]f32, v: simd.f32x8) {
-	cast(^[8]f32)(p)^ = simd.to_array(v)
+	a := simd.to_array(v)
+	for lane in 0..<8 {
+		p[lane] = a[lane]
+	}
 }
 
 // Independent byte accumulators reduce horizontal reductions without allowing
@@ -63,20 +66,20 @@ drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr {
 	return total
 }
 
-scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, context: rawptr) {
+scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) {
 	for i: uintptr = 0; i < count; i += 1 {
 		x[i] += speed[i]
 		if x[i] > 1280.0 {
-			x[i] = random(context) * -1280.0
+			x[i] = random(ctx) * -1280.0
 		}
 		y[i] += speed[i]
 		if y[i] > 720.0 {
-			y[i] = random(context) * -720.0
+			y[i] = random(ctx) * -720.0
 		}
 	}
 }
 
-dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, context: rawptr) -> uintptr {
+dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) -> uintptr {
 	i: uintptr = 0
 	for i < count {
 		nx := x[i] + speed[i]
@@ -84,8 +87,8 @@ dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: u
 		if !(nx > 1280.0 && ny > 720.0) {
 			break
 		}
-		x[i] = random(context) * -1280.0
-		y[i] = random(context) * -720.0
+		x[i] = random(ctx) * -1280.0
+		y[i] = random(ctx) * -720.0
 		i += 1
 	}
 	return i
@@ -95,7 +98,7 @@ dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: u
 // scalar repair only for exceptional lanes, exact star order and x-before-y RNG.
 // The C ABI contract requires x/y/speed to be distinct arrays.
 @(export)
-drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, context: rawptr) {
+drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) {
 	if count == 0 {
 		return
 	}
@@ -118,7 +121,7 @@ drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, rando
 			continue
 		}
 		if simd.reduce_and(wrap_x & wrap_y) != 0 {
-			consumed := dense_both_wrap_run(x + i, y + i, speed + i, count - i, random, context)
+			consumed := dense_both_wrap_run(x + i, y + i, speed + i, count - i, random, ctx)
 			i += consumed
 			continue
 		}
@@ -130,15 +133,15 @@ drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, rando
 		for lane in 0..<8 {
 			index := i + uintptr(lane)
 			if xm[lane] != 0 {
-				x[index] = random(context) * -1280.0
+				x[index] = random(ctx) * -1280.0
 			}
 			if ym[lane] != 0 {
-				y[index] = random(context) * -720.0
+				y[index] = random(ctx) * -720.0
 			}
 		}
 		i += 8
 	}
 	if i < count {
-		scalar_run(x + i, y + i, speed + i, count - i, random, context)
+		scalar_run(x + i, y + i, speed + i, count - i, random, ctx)
 	}
 }
