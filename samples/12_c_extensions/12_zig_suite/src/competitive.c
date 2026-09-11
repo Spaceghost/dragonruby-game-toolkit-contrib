@@ -76,18 +76,19 @@ dense_both_wrap_run(float *x, float *y, const float *speed, size_t count,
     return i;
 }
 
-/* Keep the mixed exceptional work out of the vector-search loop. Passing the
- * already-computed results/masks avoids repeated arithmetic; one outlined copy
- * may also reduce ARM code size. CI keeps this only if the measured tradeoff is
- * worthwhile rather than assuming noinline is magic. */
+/* Keep the mixed exceptional work out of the vector-search loop. Pass pointers
+ * to the already-computed vectors so this stays ABI-safe on baseline x86 where
+ * 256-bit vector arguments cannot be passed by value without AVX. The spill/call
+ * cost remains visible in the competition and is accepted only if size/perf win. */
 static __attribute__((noinline)) void
-mixed_repair(float *x, float *y, floats8 nx, floats8 ny,
-             masks8 wrap_x, masks8 wrap_y, rival_random random, void *context) {
-    memcpy(x, &nx, sizeof nx);
-    memcpy(y, &ny, sizeof ny);
+mixed_repair(float *x, float *y, const floats8 *nx, const floats8 *ny,
+             const masks8 *wrap_x, const masks8 *wrap_y,
+             rival_random random, void *context) {
+    memcpy(x, nx, sizeof *nx);
+    memcpy(y, ny, sizeof *ny);
     for (size_t lane = 0; lane < 8; ++lane) {
-        if (wrap_x[lane]) x[lane] = random(context) * -1280.0f;
-        if (wrap_y[lane]) y[lane] = random(context) * -720.0f;
+        if ((*wrap_x)[lane]) x[lane] = random(context) * -1280.0f;
+        if ((*wrap_y)[lane]) y[lane] = random(context) * -720.0f;
     }
 }
 
@@ -115,7 +116,7 @@ void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
             i += consumed;
             continue;
         }
-        mixed_repair(x + i, y + i, nx, ny, wrap_x, wrap_y, random, context);
+        mixed_repair(x + i, y + i, &nx, &ny, &wrap_x, &wrap_y, random, context);
         i += 8;
     }
     if (i < count) scalar_block(x + i, y + i, speed + i, count - i, random, context);
