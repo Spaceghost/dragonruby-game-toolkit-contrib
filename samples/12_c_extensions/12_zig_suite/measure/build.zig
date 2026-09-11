@@ -48,8 +48,10 @@ pub fn build(b: *std.Build) void {
     if (mruby) |root| {
         const boxing = b.option(enum { word, nan, none }, "boxing", "Matching VM boxing") orelse .word;
         const published = b.option(bool, "published", "Matching DragonRuby-patched VM") orelse false;
+        const query = library(b, "measure_ruby_query", "../sqlite/query.zig", target, optimize);
+        query.root_module.addIncludePath(path(b, "../sqlite"));
         const extras = [_][]const u8{
-            "-DDRBZ_SUITE_TEST_HOST", "-DMRB_NO_PRESYM",
+            "-DDRBZ_SUITE_TEST_HOST", "-DDRBZ_SQLITE_QUERY", "-DMRB_NO_PRESYM",
             if (published) "-DDRBZ_PUBLISHED_MRUBY" else "-DDRBZ_UPSTREAM_MRUBY",
             switch (boxing) { .word => "-DMRB_WORD_BOXING", .nan => "-DMRB_NAN_BOXING", .none => "-DMRB_NO_BOXING" },
             if (boxing == .nan) "-DMRB_INT32" else "-DMRB_INT64",
@@ -60,7 +62,7 @@ pub fn build(b: *std.Build) void {
             const flags = std.mem.concat(b.allocator, []const u8, &.{ if (profile) &prof else &common, &extras }) catch @panic("OOM");
             const host = object(b, name, path(b, "ruby.c"), target, optimize, flags, root);
             const bridge = object(b, b.fmt("{s}-bridge", .{name}), path(b, "../bridge/bridge.c"), target, optimize, flags, root);
-            link(b, name, &.{ host, bridge }, &.{kernels}, false, root, false);
+            link(b, name, &.{ host, bridge }, &.{ kernels, query }, false, root, true);
         }
     } else {
         const legacy = library(b, "measure_legacy", "../../11_zig_native_pixel_arrays/app/native.zig", target, optimize);
