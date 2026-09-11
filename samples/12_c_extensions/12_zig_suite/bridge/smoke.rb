@@ -2,7 +2,10 @@ raise 'square' unless FFI::Zig.square(-17) == 289
 raise 'empty LF' unless FFI::Zig.count_newlines('') == 0
 raise 'binary LF' unless FFI::Zig.count_newlines("\0\n\xff\n") == 2
 raise 'large LF' unless FFI::Zig.count_newlines("\n" * 70_000) == 70_000
-raise 'nested order' unless FFI::Zig.sum(1e16, [1.0, [-1e16]], 3) == 3.0
+nested_sum = [1e16, [1.0, [-1e16]], 3]
+raise 'nested order' unless FFI::Zig.sum(*nested_sum) == 3.0
+raise 'nested single-reader order' unless FFI::Zig.sum_single_reader(*nested_sum) == 3.0
+raise 'nested direct-C order' unless FFI::Zig.sum_c_direct(*nested_sum) == 3.0
 raise 'empty sum' unless FFI::Zig.sum([], []) == 0.0
 raise 'regex literal' unless FFI::Zig.regex_index('needle', 'x' * 100 + 'needle') == 100
 raise 'regex class' unless FFI::Zig.regex_index('[a-z]+', '123abc') == 3
@@ -15,7 +18,11 @@ cycle << cycle
 checks = [
   -> { FFI::Zig.square(46_341) },
   -> { FFI::Zig.sum(cycle) },
+  -> { FFI::Zig.sum_single_reader(cycle) },
+  -> { FFI::Zig.sum_c_direct(cycle) },
   -> { FFI::Zig.sum([1, 'not a number']) },
+  -> { FFI::Zig.sum_single_reader([1, 'not a number']) },
+  -> { FFI::Zig.sum_c_direct([1, 'not a number']) },
   -> { FFI::Zig.regex_index('[', 'a') },
   -> { FFI::Zig.hello('x' * 512) }
 ]
