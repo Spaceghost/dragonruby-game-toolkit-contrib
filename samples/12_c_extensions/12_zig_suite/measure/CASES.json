@@ -37,6 +37,9 @@
     "ruby/query-json-1": ["ffi_zig_cached"],
     "ruby/query-json-64": ["ffi_zig_cached"],
     "ruby/query-json-1024": ["ffi_zig_cached"],
-    "ruby/sum-nested/64": ["ruby_loop", "ffi_c_direct", "ffi_zig_single_reader", "ffi_zig_batch_reader"]
+    "ruby/sum-nested/64": ["ruby_loop", "ffi_c_direct", "ffi_zig_single_reader", "ffi_zig_batch_reader"],
+    "ruby/starfield-draw-64": ["ffi_native_one_object"],
+    "ruby/starfield-draw-1024": ["ffi_native_one_object"],
+    "ruby/starfield-draw-16384": ["ffi_native_one_object"]
   }
 }
