@@ -9,9 +9,14 @@ extern "C" {
  * Readers must not allocate, raise, execute Ruby, or mutate borrowed input. */
 typedef struct { int kind; double number; const void *children; size_t length; } drbz_view;
 typedef void (*drbz_reader)(void *, const void *, size_t, drbz_view *);
-/* 0 = success, 1 = unsupported value, 2 = depth/cycle failure.
+typedef size_t (*drbz_reader_batch)(void *, const void *, size_t, drbz_view *, size_t capacity);
+/* 0 = success, 1 = unsupported/invalid reader output, 2 = depth/cycle failure.
  * Failure leaves result unchanged. Maximum active array depth is 64. */
 int drbz_sum_tree(const void *, size_t, drbz_reader, void *, double *result);
+/* Same semantics, but asks the adapter for up to 16 adjacent values per call.
+ * The reader returns 1..capacity views. A batch may be re-read after a nested
+ * child because depth-first order deliberately avoids retaining Ruby views. */
+int drbz_sum_tree_batched(const void *, size_t, drbz_reader_batch, void *, double *result);
 /* No overlap. The result is NUL terminated; written excludes that NUL.
  * Insufficient capacity leaves output and written untouched. */
 int drbz_greeting(int goodbye, const unsigned char *, size_t,
