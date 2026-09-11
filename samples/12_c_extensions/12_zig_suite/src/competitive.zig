@@ -20,18 +20,15 @@ pub fn countDual(bytes: []const u8) usize {
             even +%= @select(u8, a == newline, one, zero);
             odd +%= @select(u8, b == newline, one, zero);
         }
-        // Each lane <= 255; widened pair <= 510; the reduction <= 16320.
         const wide_even: @Vector(32, u16) = @intCast(even);
         const wide_odd: @Vector(32, u16) = @intCast(odd);
         total += @reduce(.Add, wide_even + wide_odd);
     }
     while (bytes.len - offset >= 32) {
         const value: V = bytes[offset..][0..32].*;
-        // One block has at most 32 hits, so byte reduction is exact.
         total += @reduce(.Add, @select(u8, value == newline, one, zero));
         offset += 32;
     }
-    // Two bounded vector fragments leave at most seven scalar tail bytes.
     inline for (.{ 16, 8 }) |width| {
         if (bytes.len - offset >= width) {
             const Tail = @Vector(width, u8);
@@ -45,11 +42,10 @@ pub fn countDual(bytes: []const u8) usize {
     return total;
 }
 
-// Externally visible on purpose: keeping this tiny fallback as a real ABI
-// function prevents whole-unit argument specialization from turning the common
-// count=8 call site into an eight-copy ARM code balloon. It is also useful as a
-// direct scalar fallback for embeddings that need identical RNG ordering.
-export fn drbz_stars_scalar_fallback(x: [*c]f32, y: [*c]f32, speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
+// These three storage ranges are contractually disjoint. `noalias` is therefore
+// an executable optimizer contract, not a benchmark-only assumption. The RNG
+// callback likewise may not inspect or mutate them through hidden aliases.
+export fn drbz_stars_scalar_fallback(noalias x: [*c]f32, noalias y: [*c]f32, noalias speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
     if (count == 0) return;
     var i: usize = 0;
@@ -61,7 +57,7 @@ export fn drbz_stars_scalar_fallback(x: [*c]f32, y: [*c]f32, speed: [*c]const f3
     }
 }
 
-noinline fn denseBothWrapRun(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) usize {
+noinline fn denseBothWrapRun(noalias x: [*]f32, noalias y: [*]f32, noalias speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) usize {
     @setFloatMode(.strict);
     var i: usize = 0;
     while (i < count) : (i += 1) {
@@ -74,7 +70,7 @@ noinline fn denseBothWrapRun(x: [*]f32, y: [*]f32, speed: [*]const f32, count: u
     return i;
 }
 
-pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, context: ?*anyopaque) void {
+pub fn starsBlock(noalias x: []f32, noalias y: []f32, noalias speed: []const f32, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
     const V = @Vector(8, f32);
     const max_x: V = @splat(1280);
@@ -99,13 +95,6 @@ pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, contex
             i += consumed;
             continue;
         }
-
-        // Mixed blocks already paid for nx/ny. Publish those vector results,
-        // then repair only lanes that wrapped. The callback contract requires
-        // RNG state to be independent of these arrays, so this retains the
-        // observable RNG sequence while avoiding eight repeated scalar adds and
-        // an ABI call per exceptional block. ctz visits stars in ascending order;
-        // x is still consumed before y for a star that wraps both axes.
         x[i..][0..8].* = nx;
         y[i..][0..8].* = ny;
         const x_bits: u8 = @bitCast(wrap_x);
@@ -127,7 +116,7 @@ pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, contex
 export fn drbz_count_dual(bytes: [*c]const u8, length: usize) usize {
     return if (length == 0) 0 else countDual(bytes[0..length]);
 }
-export fn drbz_stars_block(x: [*c]f32, y: [*c]f32, speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
+export fn drbz_stars_block(noalias x: [*c]f32, noalias y: [*c]f32, noalias speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
     if (count == 0) return;
     starsBlock(x[0..count], y[0..count], speed[0..count], random, context);
 }
