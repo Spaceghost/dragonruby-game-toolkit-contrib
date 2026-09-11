@@ -14,6 +14,9 @@ static uint64_t ns_now(void) {
 static uint64_t mix(uint64_t h, uint32_t v) { return (h ^ v) * UINT64_C(1099511628211); }
 static uint32_t fbits(float x) { uint32_t u; memcpy(&u, &x, sizeof u); return u; }
 
+enum language { LANG_ZIG, LANG_ODIN, LANG_COUNT };
+static const char *language_name(enum language language) { return language == LANG_ZIG ? "zig" : "odin"; }
+
 typedef struct { uint64_t calls, checksum; } sink_state;
 static void consume(void *raw, const drbz_packed_sprite *sprites, size_t count) {
     sink_state *s = raw;
@@ -25,17 +28,37 @@ static void consume(void *raw, const drbz_packed_sprite *sprites, size_t count) 
     }
 }
 
-typedef struct { void *storage; drbz_starfield field; } owned_field;
-static owned_field make_field(size_t count, uint64_t seed) {
-    owned_field result = {0};
-    size_t bytes = drbz_starfield_storage_bytes(count);
+typedef struct { void *storage; drbz_starfield field; enum language language; } owned_field;
+static size_t storage_bytes(enum language language, size_t count) {
+    return language == LANG_ZIG ? drbz_starfield_storage_bytes(count) : drbo_starfield_storage_bytes(count);
+}
+static owned_field make_field(enum language language, size_t count, uint64_t seed) {
+    owned_field result = {.language=language};
+    size_t zig_bytes = drbz_starfield_storage_bytes(count), odin_bytes = drbo_starfield_storage_bytes(count);
+    assert(zig_bytes == odin_bytes);
+    size_t bytes = storage_bytes(language, count);
     assert(bytes != 0 || count == 0);
     result.storage = bytes ? malloc(bytes) : NULL;
     assert(!bytes || result.storage);
-    assert(drbz_starfield_init(result.storage, bytes, count, seed, &result.field) == 0);
+    int rc = language == LANG_ZIG
+        ? drbz_starfield_init(result.storage, bytes, count, seed, &result.field)
+        : drbo_starfield_init(result.storage, bytes, count, seed, &result.field);
+    assert(rc == 0);
     return result;
 }
 static void free_field(owned_field *f) { free(f->storage); f->storage = NULL; }
+static void update(owned_field *f) {
+    if (f->language == LANG_ZIG) drbz_starfield_update(&f->field); else drbo_starfield_update(&f->field);
+}
+static void pack(owned_field *f) {
+    if (f->language == LANG_ZIG) drbz_starfield_pack(&f->field); else drbo_starfield_pack(&f->field);
+}
+static void update_pack(owned_field *f) {
+    if (f->language == LANG_ZIG) drbz_starfield_update_pack(&f->field); else drbo_starfield_update_pack(&f->field);
+}
+static void frame(owned_field *f, sink_state *sink) {
+    if (f->language == LANG_ZIG) drbz_starfield_frame(&f->field, consume, sink); else drbo_starfield_frame(&f->field, consume, sink);
+}
 static void same_field(const drbz_starfield *a, const drbz_starfield *b) {
     assert(a->len == b->len && a->rng_state == b->rng_state);
     for (size_t i = 0; i < a->len; ++i) {
@@ -44,30 +67,40 @@ static void same_field(const drbz_starfield *a, const drbz_starfield *b) {
         assert(fbits(a->speed[i]) == fbits(b->speed[i]));
     }
 }
-static void check_size(size_t count) {
-    owned_field update = make_field(count, UINT64_C(0x123456789abcdef));
-    owned_field full = make_field(count, UINT64_C(0x123456789abcdef));
-    owned_field packed = make_field(count, UINT64_C(0x123456789abcdef));
-    owned_field framed = make_field(count, UINT64_C(0x123456789abcdef));
-    sink_state sink = {0};
-    drbz_starfield_update(&update.field);
-    drbz_starfield_update(&full.field); drbz_starfield_pack(&full.field);
-    drbz_starfield_update_pack(&packed.field);
-    drbz_starfield_frame(&framed.field, consume, &sink);
-    same_field(&update.field, &full.field);
-    same_field(&update.field, &packed.field);
-    same_field(&update.field, &framed.field);
-    assert(sink.calls == 1);
-    for (size_t i = 0; i < count; ++i) {
-        assert(fbits(full.field.sprites[i].x) == fbits(packed.field.sprites[i].x));
-        assert(fbits(full.field.sprites[i].y) == fbits(packed.field.sprites[i].y));
-        assert(full.field.sprites[i].w == packed.field.sprites[i].w);
-        assert(full.field.sprites[i].h == packed.field.sprites[i].h);
-        assert(full.field.sprites[i].path_id == packed.field.sprites[i].path_id);
-        assert(fbits(framed.field.sprites[i].x) == fbits(packed.field.sprites[i].x));
-        assert(fbits(framed.field.sprites[i].y) == fbits(packed.field.sprites[i].y));
+static void same_sprites(const drbz_starfield *a, const drbz_starfield *b) {
+    assert(a->len == b->len);
+    for (size_t i = 0; i < a->len; ++i) {
+        assert(fbits(a->sprites[i].x) == fbits(b->sprites[i].x));
+        assert(fbits(a->sprites[i].y) == fbits(b->sprites[i].y));
+        assert(fbits(a->sprites[i].w) == fbits(b->sprites[i].w));
+        assert(fbits(a->sprites[i].h) == fbits(b->sprites[i].h));
+        assert(a->sprites[i].path_id == b->sprites[i].path_id);
     }
-    free_field(&update); free_field(&full); free_field(&packed); free_field(&framed);
+}
+static void check_size(size_t count) {
+    const uint64_t seed = UINT64_C(0x123456789abcdef);
+    owned_field zig = make_field(LANG_ZIG, count, seed), odin = make_field(LANG_ODIN, count, seed);
+    same_field(&zig.field, &odin.field); same_sprites(&zig.field, &odin.field);
+    free_field(&zig); free_field(&odin);
+
+    for (int stage = 0; stage < 4; ++stage) {
+        zig = make_field(LANG_ZIG, count, seed); odin = make_field(LANG_ODIN, count, seed);
+        sink_state zs={0}, os={0};
+        if (stage == 0) { update(&zig); update(&odin); }
+        else if (stage == 1) { update(&zig); pack(&zig); update(&odin); pack(&odin); }
+        else if (stage == 2) { update_pack(&zig); update_pack(&odin); }
+        else { frame(&zig,&zs); frame(&odin,&os); assert(zs.calls==1&&os.calls==1&&zs.checksum==os.checksum); }
+        same_field(&zig.field, &odin.field);
+        if (stage != 0) same_sprites(&zig.field, &odin.field);
+        free_field(&zig); free_field(&odin);
+    }
+
+    drbz_starfield field;
+    unsigned char tiny[256];
+    size_t needed=drbo_starfield_storage_bytes(4);
+    assert(drbo_starfield_init(tiny, needed-1, 4, 1, &field)==1);
+    assert(drbo_starfield_init(tiny+1, sizeof tiny-1, 1, 1, &field)==2);
+    assert(drbo_starfield_init(NULL,0,0,0,&field)==0&&field.len==0&&field.rng_state==1);
 }
 
 enum stage { UPDATE, UPDATE_FULL_PACK, UPDATE_PACK, FRAME_SINK };
@@ -82,10 +115,10 @@ static const char *stage_name(enum stage s) {
 }
 static uint64_t execute(owned_field *f, enum stage stage, size_t iterations, sink_state *sink) {
     for (size_t i = 0; i < iterations; ++i) {
-        if (stage == UPDATE) drbz_starfield_update(&f->field);
-        else if (stage == UPDATE_FULL_PACK) { drbz_starfield_update(&f->field); drbz_starfield_pack(&f->field); }
-        else if (stage == UPDATE_PACK) drbz_starfield_update_pack(&f->field);
-        else drbz_starfield_frame(&f->field, consume, sink);
+        if (stage == UPDATE) update(f);
+        else if (stage == UPDATE_FULL_PACK) { update(f); pack(f); }
+        else if (stage == UPDATE_PACK) update_pack(f);
+        else frame(f, sink);
     }
     uint64_t h = f->field.rng_state;
     if (f->field.len) {
@@ -94,16 +127,15 @@ static uint64_t execute(owned_field *f, enum stage stage, size_t iterations, sin
     }
     return h ^ sink->checksum ^ sink->calls;
 }
-static size_t calibrate(size_t count, enum stage stage, uint64_t min_ns) {
+static size_t calibrate(enum language language, size_t count, enum stage stage, uint64_t min_ns) {
     size_t iterations = 1;
     while (iterations < (UINT64_C(1) << 22)) {
-        owned_field f = make_field(count, UINT64_C(0x1111222233334444));
+        owned_field f = make_field(language, count, UINT64_C(0x1111222233334444));
         sink_state sink = {0};
         uint64_t start = ns_now();
         volatile uint64_t checksum = execute(&f, stage, iterations, &sink);
         uint64_t elapsed = ns_now() - start;
-        (void)checksum;
-        free_field(&f);
+        (void)checksum; free_field(&f);
         if (elapsed >= min_ns) break;
         iterations *= 2;
     }
@@ -113,7 +145,7 @@ static size_t calibrate(size_t count, enum stage stage, uint64_t min_ns) {
 int main(int argc, char **argv) {
     static const size_t sizes[] = {64, 1024, 16384, 100000};
     for (size_t i = 0; i < sizeof sizes / sizeof *sizes; ++i) check_size(sizes[i]);
-    puts("STARFIELD_CORRECTNESS {\"sizes\":4,\"stages\":4,\"sink_calls_per_frame\":1,\"renderer\":false}");
+    puts("STARFIELD_CORRECTNESS {\"sizes\":4,\"stages\":4,\"languages\":2,\"sink_calls_per_frame\":1,\"renderer\":false}");
     if (argc == 2 && strcmp(argv[1], "--check") == 0) return 0;
     unsigned trials = 11;
     uint64_t min_ns = UINT64_C(2000000);
@@ -122,18 +154,26 @@ int main(int argc, char **argv) {
     uint64_t records = 0, checksum = 0;
     for (size_t si = 0; si < sizeof sizes / sizeof *sizes; ++si) {
         for (enum stage stage = UPDATE; stage <= FRAME_SINK; stage = (enum stage)(stage + 1)) {
-            size_t iterations = calibrate(sizes[si], stage, min_ns);
+            size_t iterations = 0;
+            for (enum language language=LANG_ZIG; language<LANG_COUNT; language=(enum language)(language+1)) {
+                size_t n=calibrate(language,sizes[si],stage,min_ns); if(n>iterations) iterations=n;
+            }
             for (unsigned trial = 0; trial < trials; ++trial) {
-                owned_field f = make_field(sizes[si], UINT64_C(0x9e3779b97f4a7c15) ^ ((uint64_t)trial << 32) ^ sizes[si]);
-                sink_state sink = {0};
-                uint64_t start = ns_now();
-                uint64_t value = execute(&f, stage, iterations, &sink);
-                uint64_t elapsed = ns_now() - start;
-                checksum ^= value;
-                printf("{\"event\":\"starfield_timing\",\"size\":%zu,\"stage\":\"%s\",\"trial\":%u,\"iterations\":%zu,\"elapsed_ns\":%" PRIu64 ",\"ns_per_frame\":%.6f,\"sink_calls\":%" PRIu64 "}\n",
-                       sizes[si], stage_name(stage), trial, iterations, elapsed, (double)elapsed / (double)iterations, sink.calls);
-                ++records;
-                free_field(&f);
+                uint64_t expected=0;
+                for (unsigned slot=0;slot<LANG_COUNT;++slot) {
+                    enum language language=(enum language)((slot+trial)%LANG_COUNT);
+                    owned_field f = make_field(language, sizes[si], UINT64_C(0x9e3779b97f4a7c15) ^ ((uint64_t)trial << 32) ^ sizes[si]);
+                    sink_state sink = {0};
+                    uint64_t start = ns_now();
+                    uint64_t value = execute(&f, stage, iterations, &sink);
+                    uint64_t elapsed = ns_now() - start;
+                    if(slot==0) expected=value; else assert(value==expected);
+                    checksum ^= value;
+                    printf("{\"event\":\"starfield_timing\",\"size\":%zu,\"stage\":\"%s\",\"language\":\"%s\",\"trial\":%u,\"order\":%u,\"iterations\":%zu,\"elapsed_ns\":%" PRIu64 ",\"ns_per_frame\":%.6f,\"sink_calls\":%" PRIu64 "}\n",
+                           sizes[si], stage_name(stage), language_name(language), trial, slot, iterations, elapsed,
+                           (double)elapsed / (double)iterations, sink.calls);
+                    ++records; free_field(&f);
+                }
             }
         }
     }
