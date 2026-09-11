@@ -22,6 +22,20 @@ size_t drbz_count_blocked(const unsigned char *, size_t);
 typedef struct { int32_t position, increment, previous; uint32_t pixels[100]; } drbz_scanner;
 void drbz_scanner_reset(drbz_scanner *);
 const uint32_t *drbz_scanner_frame(drbz_scanner *);
+
+/* Parallel Odin C ABI. These deliberately mirror the portable Zig operations so
+ * one C/Ruby host adapter can compare languages without duplicating SDK glue. */
+int32_t drbo_square(int32_t value, int32_t *out);
+int32_t drbo_squares(const int32_t *input, int32_t *output, size_t len);
+double drbo_sum_ordered(double accumulator, const double *values, size_t len);
+double drbo_sum_unrolled(double accumulator, const double *values, size_t len);
+void drbo_stars_scalar(drbz_star *, size_t, drbz_random, void *);
+void drbo_stars_soa(float *x, float *y, const float *speed, size_t, drbz_random, void *);
+size_t drbo_count_scalar(const unsigned char *, size_t);
+size_t drbo_count_blocked(const unsigned char *, size_t);
+void drbo_scanner_reset(drbz_scanner *);
+const uint32_t *drbo_scanner_frame(drbz_scanner *);
+
 /* Persistent starfield state lives entirely in caller-owned storage. A frame
  * does one native update, one pack into borrowed sprite records, then one sink
  * call. Storage may be replaced only between frames. path_id=1 is the sample's
