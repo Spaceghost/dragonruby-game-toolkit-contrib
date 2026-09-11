@@ -2,8 +2,9 @@
 from __future__ import annotations
 import json, pathlib, statistics, sys
 
-VARIANTS = ("zig_scalar", "zig_blocked32", "zig_dual", "c_dual")
+VARIANTS = ("zig_scalar", "zig_blocked32", "zig_dual", "c_dual", "odin_dual")
 ZIG = VARIANTS[:3]
+TUNED = ("zig_dual", "c_dual", "odin_dual")
 OFFSETS = (0, 1, 15)
 TRIALS = 5
 
@@ -22,7 +23,7 @@ def main() -> None:
         elif line.startswith('LF_SWEEP_COMPLETE '):
             complete = json.loads(line.split(' ', 1)[1])
     expected_records = 513 * len(OFFSETS) * len(VARIANTS) * TRIALS
-    if complete is None or complete.get('records') != expected_records or len(rows) != expected_records:
+    if complete is None or complete.get('variants') != len(VARIANTS) or complete.get('records') != expected_records or len(rows) != expected_records:
         raise SystemExit(f'incomplete sweep: rows={len(rows)} complete={complete}')
 
     groups: dict[tuple[int,int,str], list[float]] = {}
@@ -42,6 +43,7 @@ def main() -> None:
     summary = []
     winners = []
     zig_winners = []
+    tuned_winners = []
     for length in range(513):
         medians = {}
         for variant in VARIANTS:
@@ -49,8 +51,10 @@ def main() -> None:
             medians[variant] = statistics.median(per_offset)
         winner = min(VARIANTS, key=medians.get)
         zig_winner = min(ZIG, key=medians.get)
-        winners.append(winner); zig_winners.append(zig_winner)
-        summary.append({'length': length, 'winner': winner, 'zig_winner': zig_winner, 'median_ns': medians})
+        tuned_winner = min(TUNED, key=medians.get)
+        winners.append(winner); zig_winners.append(zig_winner); tuned_winners.append(tuned_winner)
+        summary.append({'length': length, 'winner': winner, 'zig_winner': zig_winner,
+                        'tuned_language_winner': tuned_winner, 'median_ns': medians})
 
     def ranges(values: list[str]) -> list[tuple[int,int,str]]:
         result=[]; start=0; current=values[0]
@@ -61,23 +65,25 @@ def main() -> None:
         return result
 
     zig_ranges = ranges(zig_winners)
+    tuned_ranges = ranges(tuned_winners)
     all_ranges = ranges(winners)
-    # This intentionally does NOT emit a source threshold. Fragmented ranges are
-    # evidence that one threshold would be dishonest; subsequent repeated runs
-    # decide whether adjacent ranges collapse into a stable short/long split.
     lines = [
         '# Exhaustive short-newline sweep', '',
         'Lengths `0..512`, offsets `0/1/15`, five trials, equal iterations per length/offset/variant set.',
         'Medians are first taken within each offset and then across offsets. No timing gate or automatic dispatcher is installed.', '',
-        '## Best Zig microkernel ranges', '',
+        '## Best tuned C/Zig/Odin ranges', '',
     ]
+    lines += [f'- `{a}..{b}`: `{v}`' for a,b,v in tuned_ranges]
+    lines += ['', '## Best Zig microkernel ranges', '']
     lines += [f'- `{a}..{b}`: `{v}`' for a,b,v in zig_ranges]
-    lines += ['', '## Best overall C/Zig ranges', '']
+    lines += ['', '## Best overall ranges', '']
     lines += [f'- `{a}..{b}`: `{v}`' for a,b,v in all_ranges]
     counts = {v: winners.count(v) for v in VARIANTS}
+    tcounts = {v: tuned_winners.count(v) for v in TUNED}
     zcounts = {v: zig_winners.count(v) for v in ZIG}
-    lines += ['', f'Overall winner counts: `{counts}`.', f'Zig-only winner counts: `{zcounts}`.', '']
-    (out/'lf-sweep-summary.json').write_text(json.dumps({'complete': complete, 'lengths': summary, 'winner_ranges': all_ranges, 'zig_winner_ranges': zig_ranges}, indent=2) + '\n')
+    lines += ['', f'Overall winner counts: `{counts}`.', f'Tuned-language winner counts: `{tcounts}`.', f'Zig-only winner counts: `{zcounts}`.', '']
+    (out/'lf-sweep-summary.json').write_text(json.dumps({'complete': complete, 'lengths': summary,
+        'winner_ranges': all_ranges, 'tuned_language_winner_ranges': tuned_ranges, 'zig_winner_ranges': zig_ranges}, indent=2) + '\n')
     (out/'lf-sweep-report.md').write_text('\n'.join(lines))
     print('\n'.join(lines))
 
