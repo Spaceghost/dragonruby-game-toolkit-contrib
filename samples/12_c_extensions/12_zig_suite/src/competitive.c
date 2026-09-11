@@ -107,8 +107,17 @@ void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
             i += consumed;
             continue;
         }
-        /* Preserve star order and x-before-y RNG consumption for mixed blocks. */
-        scalar_block(x + i, y + i, speed + i, 8, random, context);
+
+        /* Mixed blocks already have their vector results. Publish them once and
+         * repair only wrapped coordinates. The RNG contract gives the callback
+         * only its own state, so clean-lane stores cannot affect it. Iterating
+         * lanes in order preserves star order and x-before-y RNG consumption. */
+        memcpy(x + i, &nx, sizeof nx);
+        memcpy(y + i, &ny, sizeof ny);
+        for (size_t lane = 0; lane < 8; ++lane) {
+            if (wrap_x[lane]) x[i + lane] = random(context) * -1280.0f;
+            if (wrap_y[lane]) y[i + lane] = random(context) * -720.0f;
+        }
         i += 8;
     }
     if (i < count) scalar_block(x + i, y + i, speed + i, count - i, random, context);
