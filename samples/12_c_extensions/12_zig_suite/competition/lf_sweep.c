@@ -9,6 +9,7 @@
 
 extern size_t control_c_count(const unsigned char *, size_t);
 
+#define VARIANTS 5
 static volatile uint64_t observable;
 static unsigned char storage[512 + 64];
 
@@ -24,6 +25,7 @@ static size_t call_variant(unsigned variant, const unsigned char *bytes, size_t 
         case 1: return drbz_count_blocked(bytes, length);
         case 2: return drbz_count_dual(bytes, length);
         case 3: return drbc_count_dual(bytes, length);
+        case 4: return drbo_count_dual(bytes, length);
         default: assert(0); return 0;
     }
 }
@@ -35,6 +37,7 @@ static uint64_t run_variant(unsigned variant, const unsigned char *bytes, size_t
         case 1: for (size_t i = 0; i < iterations; ++i) sum += drbz_count_blocked(bytes, length); break;
         case 2: for (size_t i = 0; i < iterations; ++i) sum += drbz_count_dual(bytes, length); break;
         case 3: for (size_t i = 0; i < iterations; ++i) sum += drbc_count_dual(bytes, length); break;
+        case 4: for (size_t i = 0; i < iterations; ++i) sum += drbo_count_dual(bytes, length); break;
         default: assert(0);
     }
     observable ^= sum + iterations;
@@ -55,7 +58,7 @@ static size_t calibrate(unsigned variant, const unsigned char *bytes, size_t len
 
 int main(void) {
     static const size_t offsets[] = {0, 1, 15};
-    static const char *names[] = {"zig_scalar", "zig_blocked32", "zig_dual", "c_dual"};
+    static const char *names[VARIANTS] = {"zig_scalar", "zig_blocked32", "zig_dual", "c_dual", "odin_dual"};
     uint32_t state = UINT32_C(0x5eed1234);
     for (size_t i = 0; i < sizeof storage; ++i) {
         state = state * UINT32_C(1664525) + UINT32_C(1013904223);
@@ -70,15 +73,15 @@ int main(void) {
             const unsigned char *bytes = storage + offset;
             const size_t expected = control_c_count(bytes, length);
             size_t iterations = 0;
-            for (unsigned variant = 0; variant < 4; ++variant) {
+            for (unsigned variant = 0; variant < VARIANTS; ++variant) {
                 assert(call_variant(variant, bytes, length) == expected);
                 const size_t n = calibrate(variant, bytes, length);
                 if (n > iterations) iterations = n;
             }
             for (unsigned trial = 0; trial < 5; ++trial) {
-                const unsigned rotation = (unsigned)((length + offset + trial) & 3u);
-                for (unsigned slot = 0; slot < 4; ++slot) {
-                    const unsigned variant = (slot + rotation) & 3u;
+                const unsigned rotation = (unsigned)((length + offset + trial) % VARIANTS);
+                for (unsigned slot = 0; slot < VARIANTS; ++slot) {
+                    const unsigned variant = (slot + rotation) % VARIANTS;
                     const uint64_t start = now_ns();
                     const uint64_t sum = run_variant(variant, bytes, length, iterations);
                     const uint64_t elapsed = now_ns() - start;
@@ -92,6 +95,6 @@ int main(void) {
             }
         }
     }
-    printf("LF_SWEEP_COMPLETE {\"lengths\":513,\"offsets\":3,\"variants\":4,\"trials\":5,\"records\":%" PRIu64 ",\"observable\":%" PRIu64 "}\n", records, observable);
+    printf("LF_SWEEP_COMPLETE {\"lengths\":513,\"offsets\":3,\"variants\":%d,\"trials\":5,\"records\":%" PRIu64 ",\"observable\":%" PRIu64 "}\n", VARIANTS, records, observable);
     return 0;
 }
