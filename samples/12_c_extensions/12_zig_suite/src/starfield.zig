@@ -76,6 +76,8 @@ export fn drbz_starfield_init(storage: ?*anyopaque, storage_bytes: usize, count:
         y[i] = nextRandom(out) * -720.0;
         speed[i] = 1.0 + nextRandom(out) * 4.0;
     }
+    // Width, height and asset never vary per frame. Establish them once; the
+    // hot frame pack can thereafter write only the two coordinates.
     drbz_starfield_pack(out);
     return 0;
 }
@@ -85,19 +87,27 @@ export fn drbz_starfield_update(field: *Starfield) void {
     rivals.starsBlock(field.x[0..field.len], field.y[0..field.len], field.speed[0..field.len], randomCallback, field);
 }
 
+// Full public pack re-establishes the complete canonical sprite representation.
 export fn drbz_starfield_pack(field: *Starfield) void {
     for (0..field.len) |i| {
         field.sprites[i] = .{ .x = field.x[i], .y = field.y[i], .w = 4.0, .h = 4.0, .path_id = 1 };
     }
 }
 
-export fn drbz_starfield_update_pack(field: *Starfield) void {
-    drbz_starfield_update(field);
-    drbz_starfield_pack(field);
+fn packPositions(field: *Starfield) void {
+    for (0..field.len) |i| {
+        field.sprites[i].x = field.x[i];
+        field.sprites[i].y = field.y[i];
+    }
 }
 
-// One native update, one packing pass, one batch boundary. The sink must consume
-// the borrowed records before returning and must not mutate/re-enter the field.
+export fn drbz_starfield_update_pack(field: *Starfield) void {
+    drbz_starfield_update(field);
+    packPositions(field);
+}
+
+// One native update, coordinate-only packing pass, one batch boundary. The sink
+// must consume borrowed records before returning and must not mutate/re-enter.
 export fn drbz_starfield_frame(field: *Starfield, sink: BatchSink, context: ?*anyopaque) void {
     drbz_starfield_update_pack(field);
     sink(context, field.sprites, field.len);
@@ -119,7 +129,6 @@ test "persistent starfield packs one borrowed batch without allocation" {
     try std.testing.expect(needed <= storage.len);
     var field: Starfield = undefined;
     try std.testing.expectEqual(@as(c_int, 0), drbz_starfield_init(&storage, storage.len, count, 0x12345678, &field));
-    // Force one star to wrap both axes. No-wrap updates correctly consume no RNG.
     field.x[0] = 1280.0;
     field.y[0] = 720.0;
     field.speed[0] = 1.0;
@@ -131,7 +140,23 @@ test "persistent starfield packs one borrowed batch without allocation" {
     for (0..count) |i| {
         try std.testing.expectEqual(@as(u32, @bitCast(field.x[i])), @as(u32, @bitCast(field.sprites[i].x)));
         try std.testing.expectEqual(@as(u32, @bitCast(field.y[i])), @as(u32, @bitCast(field.sprites[i].y)));
+        try std.testing.expectEqual(@as(f32, 4), field.sprites[i].w);
+        try std.testing.expectEqual(@as(f32, 4), field.sprites[i].h);
+        try std.testing.expectEqual(@as(usize, 1), field.sprites[i].path_id);
     }
+}
+
+test "full pack restores invariant render fields while hot pack need not rewrite them" {
+    var storage: [512]u8 align(@alignOf(Sprite)) = undefined;
+    var field: Starfield = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), drbz_starfield_init(&storage, storage.len, 4, 7, &field));
+    field.sprites[2].w = 99;
+    field.sprites[2].h = 98;
+    field.sprites[2].path_id = 97;
+    drbz_starfield_pack(&field);
+    try std.testing.expectEqual(@as(f32, 4), field.sprites[2].w);
+    try std.testing.expectEqual(@as(f32, 4), field.sprites[2].h);
+    try std.testing.expectEqual(@as(usize, 1), field.sprites[2].path_id);
 }
 
 test "storage contract handles zero, short and misaligned buffers" {
