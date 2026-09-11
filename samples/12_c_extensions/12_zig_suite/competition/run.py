@@ -1,4 +1,4 @@
-"""Run a matched C/Zig competition. Preserve losses; never gate CI on speed."""
+"""Run a matched C/Zig/Odin competition. Preserve losses; never gate CI on speed."""
 from __future__ import annotations
 import argparse
 from collections import defaultdict
@@ -37,7 +37,6 @@ def capture(command: list[str], destination: Path, *, expected: int = 0, timeout
 
 def source_hashes(repo: Path) -> dict[str, str]:
     paths = subprocess.check_output(['git', 'ls-files', '-z', 'samples/12_c_extensions/', '.github/workflows/zig-rivals.yml'], cwd=repo).split(b'\0')
-    # Git-tracked inputs only; symlink text is hashed without following it.
     return {os.fsdecode(p): hashlib.sha256(os.fsencode(os.readlink(repo / os.fsdecode(p)))).hexdigest()
             if (repo / os.fsdecode(p)).is_symlink() else sha(repo / os.fsdecode(p))
             for p in paths if p}
@@ -50,7 +49,16 @@ def head_to_head(rows: list[dict], manifest: dict) -> tuple[list[dict], str]:
     table = ['| Workload | Comparison (reference / candidate) | Paired process-median ratio | Range |',
              '| --- | --- | ---: | ---: |']
     for case, variants in manifest.items():
-        for reference, candidate in ((variants[0], 'c_tuned'), ('zig_previous', 'zig_tuned'), ('c_tuned', 'zig_tuned')):
+        comparisons = (
+            (variants[0], 'c_tuned'),
+            ('zig_previous', 'zig_tuned'),
+            (variants[0], 'odin_tuned'),
+            ('c_tuned', 'zig_tuned'),
+            ('c_tuned', 'odin_tuned'),
+            ('zig_tuned', 'odin_tuned'),
+        )
+        for reference, candidate in comparisons:
+            require(reference in variants and candidate in variants, f'missing manifest participant for {case}: {reference}/{candidate}')
             by_process = defaultdict(list)
             for (process, name, trial, variant), duration in timings.items():
                 if name == case and variant == candidate:
@@ -81,12 +89,24 @@ def main() -> None:
     before = source_hashes(repo)
     zig = subprocess.check_output(['zig', 'version'], text=True).strip()
     require(zig == '0.16.0', 'use Zig 0.16.0')
+    odin = subprocess.check_output(['odin', 'version'], text=True).strip()
+    require('dev-2026-09' in odin, 'use pinned Odin dev-2026-09')
+    odin_build_path = ROOT / 'odin-out/build.json'
+    require(odin_build_path.exists(), 'build Odin competitor first')
+    odin_build = json.loads(odin_build_path.read_text())
+    require(odin_build['version'] == 'dev-2026-09' and odin_build['commit'] == 'a2fb372b76e81ef31fbbc8a2cf2b4fdf5ac6c924', 'unexpected Odin pin')
     build = ['zig', 'build', '-Doptimize=ReleaseFast', f'-Dcpu={args.cpu}']
     capture([*build, 'test'], out / 'correctness', timeout=900)
     capture(build, out / 'build', timeout=900)
-    for name, artifact in (('c', ROOT / 'zig-out/lib/rival-c.o'), ('zig', ROOT / 'zig-out/lib/librival_zig.a')):
+    artifacts = (
+        ('c', ROOT / 'zig-out/lib/rival-c.o'),
+        ('zig', ROOT / 'zig-out/lib/librival_zig.a'),
+        ('odin', ROOT / 'zig-out/lib/rival-odin.o'),
+    )
+    for name, artifact in artifacts:
         capture(['objdump', '-dr', str(artifact)], out / f'{name}-assembly')
         capture(['nm', '-S', '--size-sort', '--defined-only', str(artifact)], out / f'{name}-sizes')
+        capture(['nm', '-u', str(artifact)], out / f'{name}-undefined')
     if hasattr(os, 'sched_getaffinity'):
         available = sorted(os.sched_getaffinity(0))
         try:
@@ -96,8 +116,8 @@ def main() -> None:
         affinity = sorted(os.sched_getaffinity(0))
     else:
         affinity = None
-    metadata = {'commit': git('rev-parse', 'HEAD'), 'source_sha256': before, 'zig': zig,
-                'cpu_target': args.cpu, 'mode': 'ReleaseFast', 'build_command': build,
+    metadata = {'commit': git('rev-parse', 'HEAD'), 'source_sha256': before, 'zig': zig, 'odin': odin,
+                'odin_build': odin_build, 'cpu_target': args.cpu, 'mode': 'ReleaseFast', 'build_command': build,
                 'machine': platform.machine(), 'os': platform.platform(), 'affinity': affinity,
                 'cpuinfo': Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else None,
                 'runner_image': os.environ.get('ImageVersion'), 'processes': args.processes,
@@ -132,7 +152,7 @@ def main() -> None:
     (out / 'comparisons.json').write_text(json.dumps(comparisons, indent=2) + '\n')
     allocations = [r for r in all_rows if r.get('event') == 'allocation']
     (out / 'allocations.json').write_text(json.dumps(allocations, indent=2) + '\n')
-    report = ('# Matched C/Zig competition\n\nCommit: `' + metadata['commit'] + '`\n\n'
+    report = ('# Matched C/Zig/Odin competition\n\nCommit: `' + metadata['commit'] + '`\n\n'
               'Ratios above 1 favor the candidate. Process ranges are not confidence intervals. '
               'All samples, losses and undersized batches are retained. Timings are batch means, '
               'not per-operation tail latency or renderer FPS. Allocation observations cover only '
