@@ -10,12 +10,14 @@ pub fn build(b: *std.Build) void {
     extension.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../src") });
     extension.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../sqlite") });
 
+    // Keep sqlite3 unresolved in the static query archive. The final shared
+    // bridge supplies sqlite3 exactly once; embedding a shared object as an
+    // archive member makes LLD warn (and -Werror-style CI rightly objects).
     const query = b.addLibrary(.{ .name = "zig_suite_query", .linkage = .static, .root_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = b.pathFromRoot("../sqlite/query.zig") },
         .target = target, .optimize = optimize, .link_libc = true,
     }) });
     query.root_module.addIncludePath(.{ .cwd_relative = b.pathFromRoot("../sqlite") });
-    query.root_module.linkSystemLibrary("sqlite3", .{});
 
     if (b.option([]const u8, "mruby-root", "Built test VM, not the DragonRuby SDK")) |mruby| {
         const boxing = b.option(enum { word, nan, none }, "boxing", "Matching test VM value layout") orelse .word;
@@ -47,7 +49,6 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run.step);
         b.default_step = test_step;
     } else if (b.option([]const u8, "sdk-include", "Directory containing the matching proprietary dragonruby.h and mruby headers")) |sdk| {
-        // Deliberately no support/ include path in this production branch.
         const sqlite_query = b.option(bool, "sqlite-query", "Enable cached query_json using system SQLite") orelse false;
         extension.root_module.addSystemIncludePath(.{ .cwd_relative = sdk });
         if (sqlite_query) {
