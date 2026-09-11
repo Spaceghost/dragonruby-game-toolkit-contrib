@@ -4,7 +4,19 @@ const std = @import("std");
 // mruby's value layout. Readers must not allocate, run Ruby, or mutate input.
 pub const View = extern struct { kind: c_int, number: f64, children: ?*const anyopaque, length: usize };
 pub const Reader = *const fn (?*anyopaque, ?*const anyopaque, usize, *View) callconv(.c) void;
+pub const BatchReader = *const fn (?*anyopaque, ?*const anyopaque, usize, [*c]View, usize) callconv(.c) usize;
 const Frame = struct { source: ?*const anyopaque, length: usize, next: usize = 0 };
+
+fn pushArray(frames: *[64]Frame, depth: *usize, view: View) c_int {
+    if (view.length == 0) return 0;
+    if (depth.* == frames.len or view.children == null) return 2;
+    for (frames[0..depth.*]) |ancestor| {
+        if (ancestor.source == view.children) return 2;
+    }
+    frames[depth.*] = .{ .source = view.children, .length = view.length };
+    depth.* += 1;
+    return 0;
+}
 
 // Iterative depth-first traversal preserves the original nested Adder's
 // evaluation order. Reject invalid/deep/cyclic inputs without publishing a
@@ -24,15 +36,46 @@ export fn drbz_sum_tree(source: ?*const anyopaque, length: usize, reader: Reader
         switch (view.kind) {
             1 => sum += view.number,
             2 => {
-                if (view.length == 0) continue;
-                if (depth == frames.len or view.children == null) return 2;
-                for (frames[0..depth]) |ancestor| {
-                    if (ancestor.source == view.children) return 2;
-                }
-                frames[depth] = .{ .source = view.children, .length = view.length };
-                depth += 1;
+                const code = pushArray(&frames, &depth, view);
+                if (code != 0) return code;
             },
             else => return 1,
+        }
+    }
+    result.* = sum;
+    return 0;
+}
+
+// Flat numeric arrays are the common hot path. Decode up to sixteen Ruby values
+// per boundary crossing, but retain no Ruby views across a nested descent. If a
+// decoded batch contains an array, trailing siblings are intentionally decoded
+// again after that child completes so depth-first semantics and tiny fixed
+// storage win over a large per-frame pending-view stack.
+export fn drbz_sum_tree_batched(source: ?*const anyopaque, length: usize, reader: BatchReader, context: ?*anyopaque, result: *f64) c_int {
+    @setFloatMode(.strict);
+    var frames: [64]Frame = undefined;
+    frames[0] = .{ .source = source, .length = length };
+    var depth: usize = 1;
+    var sum: f64 = 0;
+    var views: [16]View = undefined;
+    while (depth != 0) {
+        const frame = &frames[depth - 1];
+        if (frame.next == frame.length) { depth -= 1; continue; }
+        const wanted = @min(views.len, frame.length - frame.next);
+        const got = reader(context, frame.source, frame.next, &views, wanted);
+        if (got == 0 or got > wanted) return 1;
+        decode: for (views[0..got]) |view| {
+            frame.next += 1;
+            switch (view.kind) {
+                1 => sum += view.number,
+                2 => {
+                    if (view.length == 0) continue;
+                    const code = pushArray(&frames, &depth, view);
+                    if (code != 0) return code;
+                    break :decode;
+                },
+                else => return 1,
+            }
         }
     }
     result.* = sum;
@@ -104,6 +147,16 @@ fn testReader(_: ?*anyopaque, source: ?*const anyopaque, index: usize, view: *Vi
     const values: [*]const View = @ptrCast(@alignCast(source.?));
     view.* = values[index];
 }
+const BatchStats = struct { calls: usize = 0, values: usize = 0 };
+fn testBatchReader(raw: ?*anyopaque, source: ?*const anyopaque, index: usize, out: [*c]View, capacity: usize) callconv(.c) usize {
+    const values: [*]const View = @ptrCast(@alignCast(source.?));
+    if (raw) |p| {
+        const stats: *BatchStats = @ptrCast(@alignCast(p));
+        stats.calls += 1; stats.values += capacity;
+    }
+    for (0..capacity) |i| out[i] = values[index + i];
+    return capacity;
+}
 test "nested sum retains order and rejects cycles transactionally" {
     const nested = [_]View{
         .{ .kind = 1, .number = 1, .children = null, .length = 0 },
@@ -117,16 +170,34 @@ test "nested sum retains order and rejects cycles transactionally" {
     var result: f64 = 777;
     try std.testing.expectEqual(@as(c_int, 0), drbz_sum_tree(&root, root.len, testReader, null, &result));
     try std.testing.expectEqual(@as(f64, 3), result);
+    var batched: f64 = 777;
+    var stats: BatchStats = .{};
+    try std.testing.expectEqual(@as(c_int, 0), drbz_sum_tree_batched(&root, root.len, testBatchReader, &stats, &batched));
+    try std.testing.expectEqual(result, batched);
     var cycle: View = .{ .kind = 2, .number = 0, .children = null, .length = 1 };
     cycle.children = &cycle;
-    result = 777;
+    result = 777; batched = 777;
     try std.testing.expectEqual(@as(c_int, 2), drbz_sum_tree(&cycle, 1, testReader, null, &result));
+    try std.testing.expectEqual(@as(c_int, 2), drbz_sum_tree_batched(&cycle, 1, testBatchReader, null, &batched));
     try std.testing.expectEqual(@as(f64, 777), result);
+    try std.testing.expectEqual(@as(f64, 777), batched);
     cycle.kind = 0;
     try std.testing.expectEqual(@as(c_int, 1), drbz_sum_tree(&cycle, 1, testReader, null, &result));
-    try std.testing.expectEqual(@as(f64, 777), result);
+    try std.testing.expectEqual(@as(c_int, 1), drbz_sum_tree_batched(&cycle, 1, testBatchReader, null, &batched));
     try std.testing.expectEqual(@as(c_int, 0), drbz_sum_tree(null, 0, testReader, null, &result));
+    try std.testing.expectEqual(@as(c_int, 0), drbz_sum_tree_batched(null, 0, testBatchReader, null, &batched));
     try std.testing.expectEqual(@as(f64, 0), result);
+    try std.testing.expectEqual(@as(f64, 0), batched);
+}
+test "batched sum amortizes flat reader crossings" {
+    var values: [100]View = undefined;
+    for (&values, 0..) |*view, i| view.* = .{ .kind = 1, .number = @floatFromInt(i + 1), .children = null, .length = 0 };
+    var stats: BatchStats = .{};
+    var result: f64 = 0;
+    try std.testing.expectEqual(@as(c_int, 0), drbz_sum_tree_batched(&values, values.len, testBatchReader, &stats, &result));
+    try std.testing.expectEqual(@as(f64, 5050), result);
+    try std.testing.expectEqual(@as(usize, 7), stats.calls);
+    try std.testing.expectEqual(@as(usize, 100), stats.values);
 }
 test "greetings fit exactly and leave short buffers untouched" {
     var output: [16]u8 = @splat(0xaa);
