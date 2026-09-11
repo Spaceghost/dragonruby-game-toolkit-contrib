@@ -46,31 +46,44 @@ static void same_field(const drbz_starfield *a, const drbz_starfield *b) {
 }
 static void check_size(size_t count) {
     owned_field update = make_field(count, UINT64_C(0x123456789abcdef));
+    owned_field full = make_field(count, UINT64_C(0x123456789abcdef));
     owned_field packed = make_field(count, UINT64_C(0x123456789abcdef));
     owned_field framed = make_field(count, UINT64_C(0x123456789abcdef));
     sink_state sink = {0};
     drbz_starfield_update(&update.field);
+    drbz_starfield_update(&full.field); drbz_starfield_pack(&full.field);
     drbz_starfield_update_pack(&packed.field);
     drbz_starfield_frame(&framed.field, consume, &sink);
+    same_field(&update.field, &full.field);
     same_field(&update.field, &packed.field);
     same_field(&update.field, &framed.field);
     assert(sink.calls == 1);
     for (size_t i = 0; i < count; ++i) {
-        assert(fbits(packed.field.x[i]) == fbits(packed.field.sprites[i].x));
-        assert(fbits(packed.field.y[i]) == fbits(packed.field.sprites[i].y));
+        assert(fbits(full.field.sprites[i].x) == fbits(packed.field.sprites[i].x));
+        assert(fbits(full.field.sprites[i].y) == fbits(packed.field.sprites[i].y));
+        assert(full.field.sprites[i].w == packed.field.sprites[i].w);
+        assert(full.field.sprites[i].h == packed.field.sprites[i].h);
+        assert(full.field.sprites[i].path_id == packed.field.sprites[i].path_id);
         assert(fbits(framed.field.sprites[i].x) == fbits(packed.field.sprites[i].x));
         assert(fbits(framed.field.sprites[i].y) == fbits(packed.field.sprites[i].y));
     }
-    free_field(&update); free_field(&packed); free_field(&framed);
+    free_field(&update); free_field(&full); free_field(&packed); free_field(&framed);
 }
 
-enum stage { UPDATE, UPDATE_PACK, FRAME_SINK };
+enum stage { UPDATE, UPDATE_FULL_PACK, UPDATE_PACK, FRAME_SINK };
 static const char *stage_name(enum stage s) {
-    return s == UPDATE ? "update" : s == UPDATE_PACK ? "update-pack" : "frame-sink";
+    switch (s) {
+        case UPDATE: return "update";
+        case UPDATE_FULL_PACK: return "update-full-pack";
+        case UPDATE_PACK: return "update-pack";
+        case FRAME_SINK: return "frame-sink";
+    }
+    abort();
 }
 static uint64_t execute(owned_field *f, enum stage stage, size_t iterations, sink_state *sink) {
     for (size_t i = 0; i < iterations; ++i) {
         if (stage == UPDATE) drbz_starfield_update(&f->field);
+        else if (stage == UPDATE_FULL_PACK) { drbz_starfield_update(&f->field); drbz_starfield_pack(&f->field); }
         else if (stage == UPDATE_PACK) drbz_starfield_update_pack(&f->field);
         else drbz_starfield_frame(&f->field, consume, sink);
     }
@@ -100,7 +113,7 @@ static size_t calibrate(size_t count, enum stage stage, uint64_t min_ns) {
 int main(int argc, char **argv) {
     static const size_t sizes[] = {64, 1024, 16384, 100000};
     for (size_t i = 0; i < sizeof sizes / sizeof *sizes; ++i) check_size(sizes[i]);
-    puts("STARFIELD_CORRECTNESS {\"sizes\":4,\"stages\":3,\"sink_calls_per_frame\":1,\"renderer\":false}");
+    puts("STARFIELD_CORRECTNESS {\"sizes\":4,\"stages\":4,\"sink_calls_per_frame\":1,\"renderer\":false}");
     if (argc == 2 && strcmp(argv[1], "--check") == 0) return 0;
     unsigned trials = 11;
     uint64_t min_ns = UINT64_C(2000000);
