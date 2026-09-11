@@ -33,6 +33,18 @@ fn link(b: *std.Build, name: []const u8, objects: []const *std.Build.Step.Compil
     const install = b.addInstallFile(output, b.fmt("bin/{s}", .{name}));
     b.getInstallStep().dependOn(&install.step);
 }
+fn linkSqliteWithObject(b: *std.Build, name: []const u8, objects: []const *std.Build.Step.Compile, libraries: []const *std.Build.Step.Compile, extra: std.Build.LazyPath) void {
+    const cmd = b.addSystemCommand(&.{ "cc", "-no-pie", "-o" });
+    const output = cmd.addOutputFileArg(name);
+    for (objects) |obj| cmd.addArtifactArg(obj);
+    cmd.addFileArg(extra);
+    cmd.addArg("-Wl,--start-group");
+    for (libraries) |lib| cmd.addArtifactArg(lib);
+    cmd.addArg("-Wl,--end-group");
+    cmd.addArgs(&.{ "-lsqlite3", "-lm", "-pthread", "-ldl" });
+    const install = b.addInstallFile(output, b.fmt("bin/{s}", .{name}));
+    b.getInstallStep().dependOn(&install.step);
+}
 pub fn build(b: *std.Build) void {
     if (!std.mem.eql(u8, builtin.zig_version_string, "0.16.0")) @panic("Use Zig 0.16.0");
     const target = b.standardTargetOptions(.{});
@@ -65,6 +77,8 @@ pub fn build(b: *std.Build) void {
             link(b, name, &.{ host, bridge }, &.{ kernels, query }, false, root, true);
         }
     } else {
+        const odin_query_name = b.option([]const u8, "odin-query-object", "Pinned Odin query object") orelse "../sqlite/odin-out/query.o";
+        const odin_query = path(b, odin_query_name);
         const legacy = library(b, "measure_legacy", "../../11_zig_native_pixel_arrays/app/native.zig", target, optimize);
         const sql = library(b, "measure_sqlite", "../sqlite/compat.zig", target, optimize);
         sql.root_module.linkSystemLibrary("sqlite3", .{});
@@ -97,7 +111,7 @@ pub fn build(b: *std.Build) void {
             } else link(b, name, &.{ host, original, controls, regex, noop }, &.{ kernels, legacy }, false, null, false);
             const sql_name = if (profile) "sqlite-alloc" else "sqlite-time";
             const sql_host = object(b, sql_name, path(b, "sqlite.c"), target, optimize, if (profile) &prof else &common, null);
-            link(b, sql_name, &.{ sql_host, direct_c, query_c }, &.{ sql, direct, query }, false, null, true);
+            linkSqliteWithObject(b, sql_name, &.{ sql_host, direct_c, query_c }, &.{ sql, direct, query }, odin_query);
         }
     }
 }
