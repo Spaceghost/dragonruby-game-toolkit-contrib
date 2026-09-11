@@ -11,6 +11,19 @@ module Measure
   QUERY_1 = "select v from q order by rowid limit 1"
   QUERY_64 = "select v from q order by rowid limit 64"
   QUERY_1024 = "select v from q order by rowid limit 1024"
+  STAR_PATH = 'sprites/tiny-star.png'
+
+  class DrawSink
+    attr_reader :calls
+    def initialize; @calls = 0; end
+    def reset; @calls = 0; end
+    def draw_sprite(x, y, w, h, path)
+      raise 'star sink' unless w == 4.0 && h == 4.0 && path == STAR_PATH && x.is_a?(Numeric) && y.is_a?(Numeric)
+      @calls += 1
+      nil
+    end
+  end
+  DRAW_SINK = DrawSink.new
 
   def self.lf_ruby(n)
     i = 0; checksum = 0
@@ -48,37 +61,30 @@ module Measure
     end
     checksum
   end
-
   def self.sum_c_direct(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.sum_c_direct(NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.sum_c_direct(NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
-
   def self.sum_zig_single(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.sum_single_reader(NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.sum_single_reader(NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
-
   def self.sum_zig_batch(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.sum(NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.sum(NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
 
   def self.sum_nested_ruby_values(values)
-    result = 0.0
-    i = 0
+    result = 0.0; i = 0
     while i < values.length
       value = values[i]
       result += value.is_a?(Array) ? sum_nested_ruby_values(value) : value
@@ -86,39 +92,31 @@ module Measure
     end
     result
   end
-
   def self.sum_nested_ruby(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + sum_nested_ruby_values(NESTED_NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + sum_nested_ruby_values(NESTED_NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
-
   def self.sum_nested_c_direct(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.sum_c_direct(NESTED_NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.sum_c_direct(NESTED_NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
-
   def self.sum_nested_zig_single(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.sum_single_reader(NESTED_NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.sum_single_reader(NESTED_NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
-
   def self.sum_nested_zig_batch(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.sum(NESTED_NUMBERS).to_i) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.sum(NESTED_NUMBERS).to_i) & MASK; i += 1
     end
     checksum
   end
@@ -127,18 +125,15 @@ module Measure
     i = 0; checksum = 0
     while i < n
       result = "Hello " + NAME + "!"
-      checksum = (checksum + result.length + result.getbyte(6)) & MASK
-      i += 1
+      checksum = (checksum + result.length + result.getbyte(6)) & MASK; i += 1
     end
     checksum
   end
-
   def self.hello_zig(n)
     i = 0; checksum = 0
     while i < n
       result = FFI::Zig.hello(NAME)
-      checksum = (checksum + result.length + result.getbyte(6)) & MASK
-      i += 1
+      checksum = (checksum + result.length + result.getbyte(6)) & MASK; i += 1
     end
     checksum
   end
@@ -146,17 +141,14 @@ module Measure
   def self.literal_ruby(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + HAYSTACK.index(PATTERN)) & MASK
-      i += 1
+      checksum = (checksum + HAYSTACK.index(PATTERN)) & MASK; i += 1
     end
     checksum
   end
-
   def self.literal_zig(n)
     i = 0; checksum = 0
     while i < n
-      checksum = (checksum + FFI::Zig.regex_index(PATTERN, HAYSTACK)) & MASK
-      i += 1
+      checksum = (checksum + FFI::Zig.regex_index(PATTERN, HAYSTACK)) & MASK; i += 1
     end
     checksum
   end
@@ -164,17 +156,13 @@ module Measure
   def self.scanner(n)
     i = 0
     while i < n
-      FFI::Zig.update_scanner_texture
-      i += 1
+      FFI::Zig.update_scanner_texture; i += 1
     end
     i
   end
-
   def self.envelope(n)
     i = 0
-    while i < n
-      i += 1
-    end
+    while i < n; i += 1; end
     i
   end
 
@@ -190,6 +178,20 @@ module Measure
   def self.query_1(n); query_loop(QUERY_1, n); end
   def self.query_64(n); query_loop(QUERY_64, n); end
   def self.query_1024(n); query_loop(QUERY_1024, n); end
+
+  def self.starfield_prepare(count)
+    FFI::Zig.starfield_reset(count)
+    DRAW_SINK.reset
+    0
+  end
+  def self.starfield_native(n)
+    i = 0
+    while i < n
+      FFI::Zig.starfield_draw(DRAW_SINK, STAR_PATH)
+      i += 1
+    end
+    DRAW_SINK.calls
+  end
 end
 raise 'greeting mismatch' unless FFI::Zig.hello(Measure::NAME) == "Hello " + Measure::NAME + "!"
 raise 'sum mismatch' unless FFI::Zig.sum(Measure::NUMBERS) == 2080.0
@@ -200,9 +202,6 @@ raise 'nested direct-C sum mismatch' unless FFI::Zig.sum_c_direct(Measure::NESTE
 raise 'LF mismatch' unless FFI::Zig.count_newlines(Measure::TEXT) == 8
 raise 'literal mismatch' unless FFI::Zig.regex_index(Measure::PATTERN, Measure::HAYSTACK) == 4090
 
-# Build the query fixture once. Each SQL text is executed once before timing so
-# the measured query_json cases are explicit cache-hit + row/result construction
-# workloads rather than a hidden mixture of prepare miss and steady state.
 FFI::Zig.sqlite_open(':memory:')
 FFI::Zig.sqlite_exec("create table q(v text); with recursive n(x) as (values(1) union all select x+1 from n where x<1024) insert into q select printf('row-%04d',x) from n")
 [[Measure::QUERY_1, 1], [Measure::QUERY_64, 64], [Measure::QUERY_1024, 1024]].each do |sql, count|
