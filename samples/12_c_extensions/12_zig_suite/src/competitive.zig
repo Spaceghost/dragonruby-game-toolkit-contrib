@@ -45,37 +45,67 @@ pub fn countDual(bytes: []const u8) usize {
     return total;
 }
 
-// Keep RNG calls and their register pressure out of the no-wrap loop.
-noinline fn scalarBlock(x: []f32, y: []f32, speed: []const f32, random: Random, context: ?*anyopaque) void {
+// Keep the exceptional loop compact: raw pointers plus one runtime count match
+// the C helper's shape and avoid the large ARM unrolling seen with three slices.
+noinline fn scalarBlock(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
-    for (x, y, speed) |*px, *py, delta| {
-        px.* += delta;
-        if (px.* > 1280) px.* = random(context) * -1280;
-        py.* += delta;
-        if (py.* > 720) py.* = random(context) * -720;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        x[i] += speed[i];
+        if (x[i] > 1280) x[i] = random(context) * -1280;
+        y[i] += speed[i];
+        if (y[i] > 720) y[i] = random(context) * -720;
     }
+}
+
+// When a whole vector has both axes wrapping, continue scalar only while that
+// condition remains true. The all-wrap workload becomes one dense run instead
+// of paying vector detection plus an outlined call for every eight stars.
+noinline fn denseBothWrapRun(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) usize {
+    @setFloatMode(.strict);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const nx = x[i] + speed[i];
+        const ny = y[i] + speed[i];
+        if (!(nx > 1280 and ny > 720)) break;
+        x[i] = random(context) * -1280;
+        y[i] = random(context) * -720;
+    }
+    return i;
 }
 
 pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
     const V = @Vector(8, f32);
+    const max_x: V = @splat(1280);
+    const max_y: V = @splat(720);
     var i: usize = 0;
-    while (x.len - i >= 8) : (i += 8) {
+    while (x.len - i >= 8) {
         const vx: V = x[i..][0..8].*;
         const vy: V = y[i..][0..8].*;
         const vs: V = speed[i..][0..8].*;
         const nx = vx + vs;
         const ny = vy + vs;
-        if (@reduce(.Or, (nx > @as(V, @splat(1280))) | (ny > @as(V, @splat(720))))) {
-            // Ordered exceptional loop, not eight unrolled copies. Preserve
-            // the array state visible before the first possible RNG callback.
-            scalarBlock(x[i..][0..8], y[i..][0..8], speed[i..][0..8], random, context);
-        } else {
+        const wrap_x = nx > max_x;
+        const wrap_y = ny > max_y;
+        const wraps = wrap_x | wrap_y;
+        if (!@reduce(.Or, wraps)) {
             x[i..][0..8].* = nx;
             y[i..][0..8].* = ny;
+            i += 8;
+            continue;
         }
+        if (@reduce(.And, wrap_x & wrap_y)) {
+            const consumed = denseBothWrapRun(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
+            // The first eight lanes were proven dense, so progress is guaranteed.
+            i += consumed;
+            continue;
+        }
+        // Preserve star order and x-before-y RNG consumption for mixed blocks.
+        scalarBlock(x.ptr + i, y.ptr + i, speed.ptr + i, 8, random, context);
+        i += 8;
     }
-    if (i < x.len) scalarBlock(x[i..], y[i..], speed[i..], random, context);
+    if (i < x.len) scalarBlock(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
 }
 
 export fn drbz_count_dual(bytes: [*c]const u8, length: usize) usize {
