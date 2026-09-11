@@ -8,6 +8,7 @@ typedef unsigned char bytes16 __attribute__((ext_vector_type(16)));
 typedef unsigned char bytes32 __attribute__((ext_vector_type(32)));
 typedef uint16_t wide32 __attribute__((ext_vector_type(32)));
 typedef float floats8 __attribute__((ext_vector_type(8)));
+typedef int masks8 __attribute__((ext_vector_type(8)));
 
 size_t drbc_count_dual(const unsigned char *bytes, size_t length) {
     const bytes32 newline = (bytes32)'\n';
@@ -91,9 +92,9 @@ void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
         memcpy(&vy, y + i, sizeof vy);
         memcpy(&vs, speed + i, sizeof vs);
         const floats8 nx = vx + vs, ny = vy + vs;
-        const floats8 wrap_x = nx > 1280.0f;
-        const floats8 wrap_y = ny > 720.0f;
-        const floats8 wraps = wrap_x | wrap_y;
+        const masks8 wrap_x = nx > 1280.0f;
+        const masks8 wrap_y = ny > 720.0f;
+        const masks8 wraps = wrap_x | wrap_y;
         if (!__builtin_reduce_or(wraps)) {
             memcpy(x + i, &nx, sizeof nx);
             memcpy(y + i, &ny, sizeof ny);
