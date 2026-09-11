@@ -78,6 +78,7 @@ drbo_sum_tree_batched :: proc "c" (source: rawptr, length: uintptr, reader: Batc
 		if wanted > 16 { wanted = 16 }
 		got := reader(ctx, frame.source, frame.next, &views[0], wanted)
 		if got == 0 || got > wanted { return 1 }
+		descended := false
 		for j: uintptr = 0; j < got; j += 1 {
 			view := views[j]
 			frame.next += 1
@@ -85,13 +86,15 @@ drbo_sum_tree_batched :: proc "c" (source: rawptr, length: uintptr, reader: Batc
 			case 1:
 				sum += view.number
 			case 2:
-				if view.length == 0 { continue }
-				code := push_array(&frames, &depth, view)
-				if code != 0 { return code }
-				break
+				if view.length != 0 {
+					code := push_array(&frames, &depth, view)
+					if code != 0 { return code }
+					descended = true
+				}
 			case:
 				return 1
 			}
+			if descended { break }
 		}
 	}
 	result^ = sum
