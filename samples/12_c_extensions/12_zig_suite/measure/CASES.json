@@ -33,6 +33,9 @@
     "ruby/hello/128": ["ruby_concat", "ffi_zig"],
     "ruby/literal/4096": ["ruby_string_index", "ffi_tinyregex_compile_each"],
     "ruby/scanner-test-sink": ["ffi_zig"],
-    "ruby/loop-envelope": ["ruby_loop"]
+    "ruby/loop-envelope": ["ruby_loop"],
+    "ruby/query-json-1": ["ffi_zig_cached"],
+    "ruby/query-json-64": ["ffi_zig_cached"],
+    "ruby/query-json-1024": ["ffi_zig_cached"]
   }
 }
