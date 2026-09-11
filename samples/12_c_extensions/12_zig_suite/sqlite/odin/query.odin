@@ -47,7 +47,10 @@ Result :: struct {
 }
 
 when size_of(rawptr) == 8 {
-	#assert(size_of(Cache) == 80)
+	// Ten pointer/size/u64 fields (80 bytes) plus the trailing C int and its
+	// natural 8-byte struct padding. Keep this assertion because the C benchmark
+	// passes drbz_query_cache directly across the Odin ABI.
+	#assert(size_of(Cache) == 88)
 	#assert(size_of(Result) == 24)
 }
 
