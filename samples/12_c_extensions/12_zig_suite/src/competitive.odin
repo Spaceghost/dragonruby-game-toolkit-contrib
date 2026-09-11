@@ -4,15 +4,23 @@ import "core:simd"
 
 Random :: proc "c" (ctx: rawptr) -> f32
 
-load_u8x32 :: proc "contextless" (p: [^]u8) -> simd.u8x32 {
-	return simd.from_slice(simd.u8x32, p[:32])
+load_u8x32 :: proc "contextless" (p: [^]u8) -> simd.u8x32 #no_bounds_check {
+	a: [32]u8
+	for lane in 0..<32 {
+		a[lane] = p[lane]
+	}
+	return simd.from_array(a)
 }
 
-load_f32x8 :: proc "contextless" (p: [^]f32) -> simd.f32x8 {
-	return simd.from_slice(simd.f32x8, p[:8])
+load_f32x8 :: proc "contextless" (p: [^]f32) -> simd.f32x8 #no_bounds_check {
+	a: [8]f32
+	for lane in 0..<8 {
+		a[lane] = p[lane]
+	}
+	return simd.from_array(a)
 }
 
-store_f32x8 :: proc "contextless" (p: [^]f32, v: simd.f32x8) {
+store_f32x8 :: proc "contextless" (p: [^]f32, v: simd.f32x8) #no_bounds_check {
 	a := simd.to_array(v)
 	for lane in 0..<8 {
 		p[lane] = a[lane]
@@ -20,15 +28,15 @@ store_f32x8 :: proc "contextless" (p: [^]f32, v: simd.f32x8) {
 }
 
 // Independent byte accumulators reduce horizontal reductions without allowing
-// an 8-bit lane to exceed 255. Loads are bounded slices, so caller alignment is
-// irrelevant and no overlapping/out-of-range tail is touched.
+// an 8-bit lane to exceed 255. Loads are fixed local arrays, so caller alignment
+// is irrelevant and no overlapping/out-of-range tail is touched.
 @(export)
-drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr {
+drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
 	if length == 0 {
 		return 0
 	}
-	newline := cast(simd.u8x32)u8('\n')
-	one := cast(simd.u8x32)u8(1)
+	newline: simd.u8x32 = u8('\n')
+	one: simd.u8x32 = u8(1)
 	offset: uintptr = 0
 	total: uintptr = 0
 	for length - offset >= 128 {
@@ -67,7 +75,7 @@ drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr {
 	return total
 }
 
-scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) {
+scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
 	for i: uintptr = 0; i < count; i += 1 {
 		x[i] += speed[i]
 		if x[i] > 1280.0 {
@@ -80,7 +88,7 @@ scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, r
 	}
 }
 
-dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) -> uintptr {
+dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) -> uintptr #no_bounds_check {
 	i: uintptr = 0
 	for i < count {
 		nx := x[i] + speed[i]
@@ -99,12 +107,12 @@ dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: u
 // scalar repair only for exceptional lanes, exact star order and x-before-y RNG.
 // The C ABI contract requires x/y/speed to be distinct arrays.
 @(export)
-drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) {
+drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
 	if count == 0 {
 		return
 	}
-	max_x := cast(simd.f32x8)f32(1280)
-	max_y := cast(simd.f32x8)f32(720)
+	max_x: simd.f32x8 = f32(1280)
+	max_y: simd.f32x8 = f32(720)
 	i: uintptr = 0
 	for count - i >= 8 {
 		vx := load_f32x8(x[i:])
