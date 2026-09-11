@@ -21,8 +21,6 @@ static void prepare(const bench_case *c, uint32_t seed) {
             bytes[i] = c->detail == 1 ? '\n' : c->detail == 2 ? 'x' : (unsigned char)(bench_random(&seed) >> 24);
     } else {
         for (size_t i=0; i<c->size; ++i) {
-            /* At the harness iteration cap, the no-wrap workload still stays
-             * below both boundaries. Mixed/all-wrap are distinct workloads. */
             float speed = c->detail == 2 ? 4000.0f : c->detail == 1 ? (float)(i%31+1) : .00001f;
             stars[i]=(drbz_star){(float)(i%64), (float)(i%31), speed};
             xs[i]=stars[i].x; ys[i]=stars[i].y; speeds[i]=speed;
@@ -40,21 +38,11 @@ static uint64_t batch(const bench_case *c, unsigned variant, size_t iterations) 
         }
     } else {
         switch (variant) {
-        case 0:
-            for (size_t i=0; i<iterations; ++i) original_c_stars(stars,c->size,random_value,NULL);
-            break;
-        case 1:
-            for (size_t i=0; i<iterations; ++i) drbz_stars_soa(xs,ys,speeds,c->size,random_value,NULL);
-            break;
-        case 2:
-            for (size_t i=0; i<iterations; ++i) drbc_stars_block(xs,ys,speeds,c->size,random_value,NULL);
-            break;
-        case 3:
-            for (size_t i=0; i<iterations; ++i) drbz_stars_block(xs,ys,speeds,c->size,random_value,NULL);
-            break;
-        case 4:
-            for (size_t i=0; i<iterations; ++i) drbo_stars_block(xs,ys,speeds,c->size,random_value,NULL);
-            break;
+        case 0: for (size_t i=0; i<iterations; ++i) original_c_stars(stars,c->size,random_value,NULL); break;
+        case 1: for (size_t i=0; i<iterations; ++i) drbz_stars_soa(xs,ys,speeds,c->size,random_value,NULL); break;
+        case 2: for (size_t i=0; i<iterations; ++i) drbc_stars_block(xs,ys,speeds,c->size,random_value,NULL); break;
+        case 3: for (size_t i=0; i<iterations; ++i) drbz_stars_block(xs,ys,speeds,c->size,random_value,NULL); break;
+        case 4: for (size_t i=0; i<iterations; ++i) drbo_stars_block(xs,ys,speeds,c->size,random_value,NULL); break;
         default: abort();
         }
         checksum=random_state+random_calls;
@@ -71,7 +59,6 @@ static uint64_t finish(const bench_case *c,unsigned variant,uint64_t checksum) {
     }
     return checksum;
 }
-/* The scenario declarations are data, not macro-generated implementations. */
 int main(int argc,char **argv) {
     const bench_case cases[]={
         {"rival/lf/31", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,31,0,0,prepare,batch,finish},
@@ -83,6 +70,9 @@ int main(int argc,char **argv) {
         {"rival/lf/4k", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,4096,0,0,prepare,batch,finish},
         {"rival/lf/4k-all", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,4096,0,1,prepare,batch,finish},
         {"rival/lf/4k-none", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,4096,0,2,prepare,batch,finish},
+        {"rival/lf/8k", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,8192,0,0,prepare,batch,finish},
+        {"rival/lf/16k", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,16384,0,0,prepare,batch,finish},
+        {"rival/lf/64k", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,65536,0,0,prepare,batch,finish},
         {"rival/lf/1m-warm", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,1048576,0,0,prepare,batch,finish},
         {"rival/lf/1m-rotating16m", {"c_scalar","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,1048576,0,3,prepare,batch,finish},
         {"rival/stars/64-no-wrap", {"c_original","zig_previous","c_tuned","zig_tuned","odin_tuned"},5,64,1,0,prepare,batch,finish},
