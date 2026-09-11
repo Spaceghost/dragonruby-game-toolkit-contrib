@@ -1,49 +1,58 @@
 package rivals
 
+import "base:intrinsics"
 import "core:simd"
 
 Random :: proc "c" (ctx: rawptr) -> f32
 
-load_u8x32 :: proc "contextless" (p: [^]u8) -> simd.u8x32 #no_bounds_check {
-	a: [32]u8
-	for lane in 0..<32 {
-		a[lane] = p[lane]
-	}
-	return simd.from_array(a)
+load_u8x32 :: #force_inline proc "contextless" (p: [^]u8) -> simd.u8x32 {
+	return intrinsics.unaligned_load(cast(^simd.u8x32)p)
 }
 
-load_f32x8 :: proc "contextless" (p: [^]f32) -> simd.f32x8 #no_bounds_check {
-	a: [8]f32
-	for lane in 0..<8 {
-		a[lane] = p[lane]
-	}
-	return simd.from_array(a)
+load_f32x8 :: #force_inline proc "contextless" (p: [^]f32) -> simd.f32x8 {
+	return intrinsics.unaligned_load(cast(^simd.f32x8)p)
 }
 
-store_f32x8 :: proc "contextless" (p: [^]f32, v: simd.f32x8) #no_bounds_check {
-	a := simd.to_array(v)
-	for lane in 0..<8 {
-		p[lane] = a[lane]
+store_f32x8 :: #force_inline proc "contextless" (p: [^]f32, v: simd.f32x8) {
+	_ = intrinsics.unaligned_store(cast(^simd.f32x8)p, v)
+}
+
+// Reducing a 32-byte hit vector is exact because its u8 sum is at most 32.
+// This avoids the expensive final widening tree that the long dual-accumulator
+// strategy otherwise pays on medium inputs. The crossover remains benchmarked.
+count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
+	newline: simd.u8x32 = u8('\n')
+	one: simd.u8x32 = u8(1)
+	offset: uintptr = 0
+	total: uintptr = 0
+	for length - offset >= 32 {
+		value := load_u8x32(bytes[offset:])
+		hits := simd.lanes_eq(value, newline) & one
+		total += uintptr(simd.reduce_add_bisect(hits))
+		offset += 32
 	}
+	for offset < length {
+		if bytes[offset] == u8('\n') { total += 1 }
+		offset += 1
+	}
+	return total
 }
 
 // Independent byte accumulators reduce horizontal reductions without allowing
-// an 8-bit lane to exceed 255. Loads are fixed local arrays, so caller alignment
-// is irrelevant and no overlapping/out-of-range tail is touched.
+// an 8-bit lane to exceed 255. Long inputs amortize the widening tree well;
+// medium inputs use count_medium instead. No alignment precondition is added.
 @(export)
 drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
-	if length == 0 {
-		return 0
-	}
+	if length == 0 { return 0 }
+	if length <= 16384 { return count_medium(bytes, length) }
+
 	newline: simd.u8x32 = u8('\n')
 	one: simd.u8x32 = u8(1)
 	offset: uintptr = 0
 	total: uintptr = 0
 	for length - offset >= 128 {
 		pairs := (length - offset) / 64
-		if pairs > 255 {
-			pairs = 255
-		}
+		if pairs > 255 { pairs = 255 }
 		even: simd.u8x32
 		odd: simd.u8x32
 		end := offset + pairs * 64
@@ -60,31 +69,16 @@ drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr #no_bound
 			total += uintptr(ea[lane]) + uintptr(oa[lane])
 		}
 	}
-	for length - offset >= 32 {
-		value := load_u8x32(bytes[offset:])
-		hits := simd.lanes_eq(value, newline) & one
-		total += uintptr(simd.reduce_add_bisect(hits))
-		offset += 32
-	}
-	for offset < length {
-		if bytes[offset] == u8('\n') {
-			total += 1
-		}
-		offset += 1
-	}
+	if offset < length { total += count_medium(bytes[offset:], length - offset) }
 	return total
 }
 
 scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
 	for i: uintptr = 0; i < count; i += 1 {
 		x[i] += speed[i]
-		if x[i] > 1280.0 {
-			x[i] = random(ctx) * -1280.0
-		}
+		if x[i] > 1280.0 { x[i] = random(ctx) * -1280.0 }
 		y[i] += speed[i]
-		if y[i] > 720.0 {
-			y[i] = random(ctx) * -720.0
-		}
+		if y[i] > 720.0 { y[i] = random(ctx) * -720.0 }
 	}
 }
 
@@ -93,9 +87,7 @@ dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: u
 	for i < count {
 		nx := x[i] + speed[i]
 		ny := y[i] + speed[i]
-		if !(nx > 1280.0 && ny > 720.0) {
-			break
-		}
+		if !(nx > 1280.0 && ny > 720.0) { break }
 		x[i] = random(ctx) * -1280.0
 		y[i] = random(ctx) * -720.0
 		i += 1
@@ -107,10 +99,8 @@ dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: u
 // scalar repair only for exceptional lanes, exact star order and x-before-y RNG.
 // The C ABI contract requires x/y/speed to be distinct arrays.
 @(export)
-drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
-	if count == 0 {
-		return
-	}
+drbo_stars_block :: proc "c" (#no_alias x, #no_alias y: [^]f32, #no_alias speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
+	if count == 0 { return }
 	max_x: simd.f32x8 = f32(1280)
 	max_y: simd.f32x8 = f32(720)
 	i: uintptr = 0
@@ -141,16 +131,10 @@ drbo_stars_block :: proc "c" (x, y: [^]f32, speed: [^]f32, count: uintptr, rando
 		ym := simd.to_array(wrap_y)
 		for lane in 0..<8 {
 			index := i + uintptr(lane)
-			if xm[lane] != 0 {
-				x[index] = random(ctx) * -1280.0
-			}
-			if ym[lane] != 0 {
-				y[index] = random(ctx) * -720.0
-			}
+			if xm[lane] != 0 { x[index] = random(ctx) * -1280.0 }
+			if ym[lane] != 0 { y[index] = random(ctx) * -720.0 }
 		}
 		i += 8
 	}
-	if i < count {
-		scalar_run(x[i:], y[i:], speed[i:], count - i, random, ctx)
-	}
+	if i < count { scalar_run(x[i:], y[i:], speed[i:], count - i, random, ctx) }
 }
