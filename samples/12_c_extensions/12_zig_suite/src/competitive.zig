@@ -45,9 +45,10 @@ pub fn countDual(bytes: []const u8) usize {
     return total;
 }
 
-// Keep the exceptional loop compact: raw pointers plus one runtime count match
-// the C helper's shape and avoid the large ARM unrolling seen with three slices.
+// This is genuinely the exceptional path. The cold hint asks LLVM to favor
+// compact code instead of unrolling the callback-heavy scalar loop on ARM.
 noinline fn scalarBlock(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) void {
+    @branchHint(.cold);
     @setFloatMode(.strict);
     var i: usize = 0;
     while (i < count) : (i += 1) {
