@@ -4,7 +4,7 @@ import json, statistics, sys
 from collections import defaultdict
 
 SIZES = [64, 1024, 16384, 100000]
-STAGES = ["update", "update-pack", "frame-sink"]
+STAGES = ["update", "update-full-pack", "update-pack", "frame-sink"]
 TRIALS = 11
 
 rows = []
@@ -18,7 +18,7 @@ for raw in sys.stdin:
     elif line.startswith("{"):
         obj = json.loads(line)
         if obj.get("event") == "starfield_timing": rows.append(obj)
-if correct != {"sizes": 4, "stages": 3, "sink_calls_per_frame": 1, "renderer": False}:
+if correct != {"sizes": 4, "stages": 4, "sink_calls_per_frame": 1, "renderer": False}:
     raise SystemExit(f"bad correctness record: {correct!r}")
 expected = len(SIZES) * len(STAGES) * TRIALS
 if complete is None or complete.get("records") != expected or len(rows) != expected:
@@ -44,3 +44,6 @@ for size in SIZES:
         med = statistics.median(values)
         mad = statistics.median(abs(v-med) for v in values)
         print(f"| {size} | {stage} | {med:.3f} | {mad:.3f} |")
+    full = statistics.median(groups[(size, "update-full-pack")])
+    hot = statistics.median(groups[(size, "update-pack")])
+    print(f"| {size} | hot-pack/full-pack ratio | {hot/full:.3f}x | - |")
