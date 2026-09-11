@@ -3,6 +3,7 @@
 module Measure
   TEXT = ("a" * 15 + "\n") * 8
   NUMBERS = (1..64).to_a
+  NESTED_NUMBERS = NUMBERS.each_slice(8).map { |slice| [slice[0, 4], slice[4, 4]] }
   NAME = "x" * 128
   HAYSTACK = "x" * 4090 + "needle"
   PATTERN = "needle"
@@ -48,10 +49,75 @@ module Measure
     checksum
   end
 
-  def self.sum_zig(n)
+  def self.sum_c_direct(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_c_direct(NUMBERS).to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_zig_single(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_single_reader(NUMBERS).to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_zig_batch(n)
     i = 0; checksum = 0
     while i < n
       checksum = (checksum + FFI::Zig.sum(NUMBERS).to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_nested_ruby_values(values)
+    result = 0.0
+    i = 0
+    while i < values.length
+      value = values[i]
+      result += value.is_a?(Array) ? sum_nested_ruby_values(value) : value
+      i += 1
+    end
+    result
+  end
+
+  def self.sum_nested_ruby(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + sum_nested_ruby_values(NESTED_NUMBERS).to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_nested_c_direct(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_c_direct(NESTED_NUMBERS).to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_nested_zig_single(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_single_reader(NESTED_NUMBERS).to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_nested_zig_batch(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum(NESTED_NUMBERS).to_i) & MASK
       i += 1
     end
     checksum
@@ -127,6 +193,10 @@ module Measure
 end
 raise 'greeting mismatch' unless FFI::Zig.hello(Measure::NAME) == "Hello " + Measure::NAME + "!"
 raise 'sum mismatch' unless FFI::Zig.sum(Measure::NUMBERS) == 2080.0
+raise 'single-reader sum mismatch' unless FFI::Zig.sum_single_reader(Measure::NUMBERS) == 2080.0
+raise 'direct-C sum mismatch' unless FFI::Zig.sum_c_direct(Measure::NUMBERS) == 2080.0
+raise 'nested batched sum mismatch' unless FFI::Zig.sum(Measure::NESTED_NUMBERS) == 2080.0
+raise 'nested direct-C sum mismatch' unless FFI::Zig.sum_c_direct(Measure::NESTED_NUMBERS) == 2080.0
 raise 'LF mismatch' unless FFI::Zig.count_newlines(Measure::TEXT) == 8
 raise 'literal mismatch' unless FFI::Zig.regex_index(Measure::PATTERN, Measure::HAYSTACK) == 4090
 
