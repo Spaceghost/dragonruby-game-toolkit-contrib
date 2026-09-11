@@ -17,9 +17,6 @@ store_f32x8 :: #force_inline proc "contextless" (p: [^]f32, v: simd.f32x8) {
 	_ = intrinsics.unaligned_store(cast(^simd.f32x8)p, v)
 }
 
-// Reducing a 32-byte hit vector is exact because its u8 sum is at most 32.
-// This avoids the expensive final widening tree that the long dual-accumulator
-// strategy otherwise pays on medium inputs. The crossover remains benchmarked.
 count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
 	newline: simd.u8x32 = u8('\n')
 	one: simd.u8x32 = u8(1)
@@ -38,9 +35,6 @@ count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #n
 	return total
 }
 
-// Independent byte accumulators reduce horizontal reductions without allowing
-// an 8-bit lane to exceed 255. Long inputs amortize the widening tree well;
-// medium inputs use count_medium instead. No alignment precondition is added.
 @(export)
 drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
 	if length == 0 { return 0 }
@@ -65,15 +59,13 @@ drbo_count_dual :: proc "c" (bytes: [^]u8, length: uintptr) -> uintptr #no_bound
 		}
 		ea := simd.to_array(even)
 		oa := simd.to_array(odd)
-		for lane in 0..<32 {
-			total += uintptr(ea[lane]) + uintptr(oa[lane])
-		}
+		for lane in 0..<32 { total += uintptr(ea[lane]) + uintptr(oa[lane]) }
 	}
 	if offset < length { total += count_medium(bytes[offset:], length - offset) }
 	return total
 }
 
-scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
+scalar_run :: #force_inline proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
 	for i: uintptr = 0; i < count; i += 1 {
 		x[i] += speed[i]
 		if x[i] > 1280.0 { x[i] = random(ctx) * -1280.0 }
@@ -82,7 +74,7 @@ scalar_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, r
 	}
 }
 
-dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) -> uintptr #no_bounds_check {
+dense_both_wrap_run :: #force_inline proc "contextless" (x, y: [^]f32, speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) -> uintptr #no_bounds_check {
 	i: uintptr = 0
 	for i < count {
 		nx := x[i] + speed[i]
@@ -95,11 +87,10 @@ dense_both_wrap_run :: proc "contextless" (x, y: [^]f32, speed: [^]f32, count: u
 	return i
 }
 
-// Odin keeps its own readable SIMD expression: vector motion and comparisons,
-// scalar repair only for exceptional lanes, exact star order and x-before-y RNG.
-// The C ABI contract requires x/y/speed to be distinct arrays.
-@(export)
-drbo_stars_block :: proc "c" (#no_alias x, #no_alias y: [^]f32, #no_alias speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
+// A single Odin star algorithm serves both ABIs. The generic exported path
+// passes a runtime callback. A persistent starfield can pass its known callback
+// into this forced-inline core, allowing LLVM to devirtualize owned RNG calls.
+stars_core :: #force_inline proc "contextless" (#no_alias x, #no_alias y: [^]f32, #no_alias speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
 	if count == 0 { return }
 	max_x: simd.f32x8 = f32(1280)
 	max_y: simd.f32x8 = f32(720)
@@ -137,4 +128,9 @@ drbo_stars_block :: proc "c" (#no_alias x, #no_alias y: [^]f32, #no_alias speed:
 		i += 8
 	}
 	if i < count { scalar_run(x[i:], y[i:], speed[i:], count - i, random, ctx) }
+}
+
+@(export)
+drbo_stars_block :: proc "c" (#no_alias x, #no_alias y: [^]f32, #no_alias speed: [^]f32, count: uintptr, random: Random, ctx: rawptr) #no_bounds_check {
+	stars_core(x, y, speed, count, random, ctx)
 }
