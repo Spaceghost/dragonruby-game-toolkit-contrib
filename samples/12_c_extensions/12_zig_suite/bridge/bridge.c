@@ -61,9 +61,7 @@ static mrb_value regex_index(mrb_state *mrb, mrb_value self) {
     }
     return mrb_fixnum_value(index);
 }
-static void read_value(void *context, const void *source, size_t index, drbz_view *view) {
-    (void)context;
-    mrb_value value = ((const mrb_value *)source)[index];
+static void view_from_value(mrb_value value, drbz_view *view) {
     *view = (drbz_view){0, 0, NULL, 0};
     if (mrb_fixnum_p(value)) {
         view->kind = 1;
@@ -77,19 +75,70 @@ static void read_value(void *context, const void *source, size_t index, drbz_vie
         view->length = (size_t)RARRAY_LEN(value);
     }
 }
-static mrb_value sum_values(mrb_state *mrb, mrb_value self) {
-    (void)self;
+static void read_value(void *context, const void *source, size_t index, drbz_view *view) {
+    (void)context;
+    view_from_value(((const mrb_value *)source)[index], view);
+}
+static size_t read_values(void *context, const void *source, size_t index, drbz_view *views, size_t capacity) {
+    (void)context;
+    const mrb_value *values = (const mrb_value *)source + index;
+    for (size_t i = 0; i < capacity; ++i) view_from_value(values[i], views + i);
+    return capacity;
+}
+static mrb_value sum_values_impl(mrb_state *mrb, int batched) {
     mrb_value *values;
     mrb_int length;
     api->mrb_get_args(mrb, "*", &values, &length);
     double result = 0;
-    int status = drbz_sum_tree(values, (size_t)length, read_value, NULL, &result);
+    int status = batched
+        ? drbz_sum_tree_batched(values, (size_t)length, read_values, NULL, &result)
+        : drbz_sum_tree(values, (size_t)length, read_value, NULL, &result);
     if (status != 0) {
         argument_error(mrb, status == 1 ? "unsupported value in nested sum" : "cyclic or excessively deep array");
         return mrb_nil_value();
     }
     return api->drb_float_value(mrb, result);
 }
+static mrb_value sum_values(mrb_state *mrb, mrb_value self) { (void)self; return sum_values_impl(mrb, 1); }
+#ifdef DRBZ_SUITE_TEST_HOST
+static mrb_value sum_values_single(mrb_state *mrb, mrb_value self) { (void)self; return sum_values_impl(mrb, 0); }
+typedef struct { const mrb_value *values; size_t length, next; } c_sum_frame;
+static int direct_c_sum(const mrb_value *values, size_t length, double *result) {
+    c_sum_frame frames[64];
+    frames[0] = (c_sum_frame){values, length, 0};
+    size_t depth = 1;
+    double sum = 0;
+    while (depth) {
+        c_sum_frame *frame = &frames[depth - 1];
+        if (frame->next == frame->length) { --depth; continue; }
+        mrb_value value = frame->values[frame->next++];
+        if (mrb_fixnum_p(value)) sum += (double)mrb_fixnum(value);
+        else if (mrb_float_p(value)) sum += (double)mrb_float(value);
+        else if (mrb_array_p(value)) {
+            size_t n = (size_t)RARRAY_LEN(value);
+            if (!n) continue;
+            const mrb_value *children = RARRAY_PTR(value);
+            if (depth == 64 || !children) return 2;
+            for (size_t i = 0; i < depth; ++i) if (frames[i].values == children) return 2;
+            frames[depth++] = (c_sum_frame){children, n, 0};
+        } else return 1;
+    }
+    *result = sum;
+    return 0;
+}
+static mrb_value sum_values_c_direct(mrb_state *mrb, mrb_value self) {
+    (void)self;
+    mrb_value *values; mrb_int length;
+    api->mrb_get_args(mrb, "*", &values, &length);
+    double result = 0;
+    int status = direct_c_sum(values, (size_t)length, &result);
+    if (status != 0) {
+        argument_error(mrb, status == 1 ? "unsupported value in nested sum" : "cyclic or excessively deep array");
+        return mrb_nil_value();
+    }
+    return api->drb_float_value(mrb, result);
+}
+#endif
 static mrb_value greeting(mrb_state *mrb, int goodbye) {
     char *name;
     mrb_int length;
@@ -235,6 +284,10 @@ DRB_FFI_EXPORT void drb_register_c_extensions(mrb_state *mrb, drb_api_t *host) {
     api->mrb_define_module_function(mrb, zig, "count_newlines", newlines, MRB_ARGS_REQ(1));
     api->mrb_define_module_function(mrb, zig, "regex_index", regex_index, MRB_ARGS_REQ(2));
     api->mrb_define_module_function(mrb, zig, "sum", sum_values, MRB_ARGS_ANY());
+#ifdef DRBZ_SUITE_TEST_HOST
+    api->mrb_define_module_function(mrb, zig, "sum_single_reader", sum_values_single, MRB_ARGS_ANY());
+    api->mrb_define_module_function(mrb, zig, "sum_c_direct", sum_values_c_direct, MRB_ARGS_ANY());
+#endif
     api->mrb_define_module_function(mrb, zig, "hello", hello, MRB_ARGS_REQ(1));
     api->mrb_define_module_function(mrb, zig, "goodbye", goodbye, MRB_ARGS_REQ(1));
     api->mrb_define_module_function(mrb, zig, "reset_scanner", reset, MRB_ARGS_NONE());
