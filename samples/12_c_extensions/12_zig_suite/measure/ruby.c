@@ -10,8 +10,6 @@ static mrb_state *vm;
 static mrb_value receiver;
 static uint64_t uploads, pixels_checksum;
 #ifdef DRBZ_PROFILE
-/* Header size is a multiple of max_align_t. Payload bytes, not allocator usable
- * bytes or Ruby object counts, are tracked. Timing uses mrb_open() unchanged. */
 typedef union { max_align_t alignment; size_t size; } allocation_header;
 static meter_stats statistics;
 static uint64_t live;
@@ -76,8 +74,12 @@ static const char *methods[][4] = {
     {"query_64", NULL, NULL, NULL},
     {"query_1024", NULL, NULL, NULL},
     {"sum_nested_ruby", "sum_nested_c_direct", "sum_nested_zig_single", "sum_nested_zig_batch"},
+    {"starfield_native", NULL, NULL, NULL},
+    {"starfield_native", NULL, NULL, NULL},
+    {"starfield_native", NULL, NULL, NULL},
 };
 static const uint64_t expected_per_call[] = {8, 2080, 255, 4090, 1, 1, 17, 80, 1040, 2080};
+static uint64_t expected(const bench_case *c) { return c->task >= 10 ? c->size : expected_per_call[c->task]; }
 static void reset(const bench_case *c, uint32_t seed) {
     (void)seed;
     mrb_full_gc(vm); uploads = pixels_checksum = 0;
@@ -88,7 +90,12 @@ static void reset(const bench_case *c, uint32_t seed) {
         int arena = mrb_gc_arena_save(vm);
         mrb_value warm = mrb_funcall(vm, receiver, methods[c->task][0], 1, mrb_fixnum_value(1));
         check_vm(); assert(mrb_fixnum_p(warm));
-        assert((uint64_t)mrb_fixnum(warm) == expected_per_call[c->task]);
+        assert((uint64_t)mrb_fixnum(warm) == expected(c));
+        mrb_gc_arena_restore(vm, arena); mrb_full_gc(vm);
+    } else if (c->task >= 10) {
+        int arena = mrb_gc_arena_save(vm);
+        mrb_value prepared = mrb_funcall(vm, receiver, "starfield_prepare", 1, mrb_fixnum_value((mrb_int)c->size));
+        check_vm(); assert(mrb_fixnum_p(prepared) && mrb_fixnum(prepared) == 0);
         mrb_gc_arena_restore(vm, arena); mrb_full_gc(vm);
     }
 }
@@ -97,7 +104,7 @@ static uint64_t batch(const bench_case *c, unsigned variant, size_t n) {
     mrb_value result = mrb_funcall(vm, receiver, methods[c->task][variant], 1, mrb_fixnum_value((mrb_int)n));
     check_vm(); assert(mrb_fixnum_p(result));
     uint64_t checksum = (uint64_t)mrb_fixnum(result);
-    assert(checksum == ((n * expected_per_call[c->task]) & UINT64_C(0x3fffffff)));
+    assert(checksum == ((n * expected(c)) & UINT64_C(0x3fffffff)));
     mrb_gc_arena_restore(vm, arena);
     return checksum;
 }
@@ -129,7 +136,7 @@ int main(int argc, char **argv) {
 #ifdef DRBZ_PROFILE
     bench_alloc_record("mruby-allocf", "ruby/vm", "real_mruby", "open-register-parse-gc", 1, 0, meter_end());
 #endif
-    printf("{\"event\":\"ruby_environment\",\"version\":\"%s\",\"boxing\":\"%s\",\"gc\":\"enabled\",\"renderer\":false,\"adapter_linkage\":\"static-test-host\",\"sqlite_query_cache\":true,\"live_units\":\"requested-payload-bytes\"}\n", MRUBY_VERSION, DRBZ_BOXING_NAME);
+    printf("{\"event\":\"ruby_environment\",\"version\":\"%s\",\"boxing\":\"%s\",\"gc\":\"enabled\",\"renderer\":false,\"starfield_draw_sink\":true,\"adapter_linkage\":\"static-test-host\",\"sqlite_query_cache\":true,\"live_units\":\"requested-payload-bytes\"}\n", MRUBY_VERSION, DRBZ_BOXING_NAME);
     const bench_case cases[] = {
         {"ruby/lf/128", {"ruby_byte_loop","ffi_zig"}, 2,128,0,0,reset,batch,finish},
         {"ruby/sum/64", {"ruby_loop","ffi_c_direct","ffi_zig_single_reader","ffi_zig_batch_reader"}, 4,64,1,0,reset,batch,finish},
@@ -141,6 +148,9 @@ int main(int argc, char **argv) {
         {"ruby/query-json-64", {"ffi_zig_cached"}, 1,64,7,0,reset,batch,finish},
         {"ruby/query-json-1024", {"ffi_zig_cached"}, 1,1024,8,0,reset,batch,finish},
         {"ruby/sum-nested/64", {"ruby_loop","ffi_c_direct","ffi_zig_single_reader","ffi_zig_batch_reader"}, 4,64,9,0,reset,batch,finish},
+        {"ruby/starfield-draw-64", {"ffi_native_one_object"}, 1,64,10,0,reset,batch,finish},
+        {"ruby/starfield-draw-1024", {"ffi_native_one_object"}, 1,1024,11,0,reset,batch,finish},
+        {"ruby/starfield-draw-16384", {"ffi_native_one_object"}, 1,16384,12,0,reset,batch,finish},
     };
     bench_run(cases, sizeof cases / sizeof *cases, "mruby-allocf", 0, argc - 1, argv + 1);
 #ifdef DRBZ_PROFILE
@@ -151,6 +161,7 @@ int main(int argc, char **argv) {
     bench_alloc_record("mruby-allocf", "ruby/vm", "real_mruby", "final-gc", 1, 0, meter_end());
     meter_begin();
 #endif
+    mrb_load_string(vm, "FFI::Zig.starfield_clear"); check_vm();
 #ifdef DRBZ_SQLITE_QUERY
     mrb_load_string(vm, "FFI::Zig.sqlite_close"); check_vm();
 #endif
