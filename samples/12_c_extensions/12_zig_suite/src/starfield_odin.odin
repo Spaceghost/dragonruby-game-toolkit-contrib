@@ -46,13 +46,12 @@ next_random :: #force_inline proc "contextless" (field: ^Starfield) -> f32 {
 	x ~= x << 25
 	x ~= x >> 27
 	field.rng_state = x
-	// Unsigned multiplication in Odin is defined modulo 2^N.
 	mixed := x * u64(0x2545F4914F6CDD1D)
 	top := u32(mixed >> 40)
 	return f32(top) / 16777215.0
 }
 
-random_callback :: proc "c" (raw: rawptr) -> f32 {
+owned_random :: #force_inline proc "c" (raw: rawptr) -> f32 {
 	return next_random(cast(^Starfield)raw)
 }
 
@@ -90,7 +89,9 @@ drbo_starfield_init :: proc "c" (storage: rawptr, available: uintptr, count: uin
 @(export)
 drbo_starfield_update :: proc "c" (field: ^Starfield) {
 	if field.len == 0 { return }
-	drbo_stars_block(field.x, field.y, field.speed, field.len, random_callback, field)
+	// Same stars_core as the exported generic path, but the force-inlined core
+	// sees this owned RNG as a compile-time-known procedure and can devirtualize it.
+	stars_core(field.x, field.y, field.speed, field.len, owned_random, field)
 }
 
 @(export)
