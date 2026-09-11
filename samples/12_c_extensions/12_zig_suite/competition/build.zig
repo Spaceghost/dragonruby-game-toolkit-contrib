@@ -57,6 +57,24 @@ pub fn build(b: *std.Build) void {
     odin_native_run.has_side_effects = true;
     test_step.dependOn(&odin_native_run.step);
 
+    const odin_app_flags = flags ++ [_][]const u8{
+        "-Ddrbz_sum_tree=drbo_sum_tree",
+        "-Ddrbz_sum_tree_batched=drbo_sum_tree_batched",
+        "-Ddrbz_greeting=drbo_greeting",
+        "-Ddrbz_worker_init=drbo_worker_init",
+        "-Ddrbz_worker_start=drbo_worker_start",
+        "-Ddrbz_worker_running=drbo_worker_running",
+        "-Ddrbz_worker_stop=drbo_worker_stop",
+    };
+    const odin_apps_obj = object(b, "odin-apps-check-c", path(b, "../tests/apps.c"), target, optimize, &odin_app_flags);
+    const odin_apps = b.addExecutable(.{ .name = "odin-apps-check", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
+    odin_apps.root_module.addObject(odin_apps_obj);
+    odin_apps.root_module.addObjectFile(odin);
+    odin_apps.root_module.linkSystemLibrary("pthread", .{});
+    const odin_apps_run = b.addRunArtifact(odin_apps);
+    odin_apps_run.has_side_effects = true;
+    test_step.dependOn(&odin_apps_run.step);
+
     const installed_tests = b.addInstallArtifact(tests, .{});
     b.step("build-tests", "Compile the test executable for source mutation checks").dependOn(&installed_tests.step);
 
