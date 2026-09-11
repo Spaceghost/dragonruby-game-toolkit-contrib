@@ -65,19 +65,26 @@ static void upload(const char *name, int width, int height, const uint32_t *pixe
     assert(green == 10); ++uploads;
 }
 static mrb_value make_float(mrb_state *mrb, double n) { return mrb_float_value(mrb, n); }
-static const char *methods[][2] = {
-    {"lf_ruby", "lf_zig"}, {"sum_ruby", "sum_zig"}, {"hello_ruby", "hello_zig"},
-    {"literal_ruby", "literal_zig"}, {"scanner", NULL}, {"envelope", NULL},
-    {"query_1", NULL}, {"query_64", NULL}, {"query_1024", NULL},
+static const char *methods[][4] = {
+    {"lf_ruby", "lf_zig", NULL, NULL},
+    {"sum_ruby", "sum_c_direct", "sum_zig_single", "sum_zig_batch"},
+    {"hello_ruby", "hello_zig", NULL, NULL},
+    {"literal_ruby", "literal_zig", NULL, NULL},
+    {"scanner", NULL, NULL, NULL},
+    {"envelope", NULL, NULL, NULL},
+    {"query_1", NULL, NULL, NULL},
+    {"query_64", NULL, NULL, NULL},
+    {"query_1024", NULL, NULL, NULL},
+    {"sum_nested_ruby", "sum_nested_c_direct", "sum_nested_zig_single", "sum_nested_zig_batch"},
 };
-static const uint64_t expected_per_call[] = {8, 2080, 255, 4090, 1, 1, 17, 80, 1040};
+static const uint64_t expected_per_call[] = {8, 2080, 255, 4090, 1, 1, 17, 80, 1040, 2080};
 static void reset(const bench_case *c, uint32_t seed) {
     (void)seed;
     mrb_full_gc(vm); uploads = pixels_checksum = 0;
     mrb_load_string(vm, "FFI::Zig.reset_scanner"); check_vm();
     mrb_gc_arena_restore(vm, 0);
     mrb_full_gc(vm);
-    if (c->task >= 6) {
+    if (c->task >= 6 && c->task <= 8) {
         /* The native cache owns one statement. Warm this case's SQL after all
          * other reset work so timed samples are explicit cache-hit workloads. */
         int arena = mrb_gc_arena_save(vm);
@@ -126,7 +133,7 @@ int main(int argc, char **argv) {
     printf("{\"event\":\"ruby_environment\",\"version\":\"%s\",\"boxing\":\"%s\",\"gc\":\"enabled\",\"renderer\":false,\"adapter_linkage\":\"static-test-host\",\"sqlite_query_cache\":true,\"live_units\":\"requested-payload-bytes\"}\n", MRUBY_VERSION, DRBZ_BOXING_NAME);
     const bench_case cases[] = {
         {"ruby/lf/128", {"ruby_byte_loop","ffi_zig"}, 2,128,0,0,reset,batch,finish},
-        {"ruby/sum/64", {"ruby_loop","ffi_zig"}, 2,64,1,0,reset,batch,finish},
+        {"ruby/sum/64", {"ruby_loop","ffi_c_direct","ffi_zig_single_reader","ffi_zig_batch_reader"}, 4,64,1,0,reset,batch,finish},
         {"ruby/hello/128", {"ruby_concat","ffi_zig"}, 2,128,2,0,reset,batch,finish},
         {"ruby/literal/4096", {"ruby_string_index","ffi_tinyregex_compile_each"}, 2,4096,3,0,reset,batch,finish},
         {"ruby/scanner-test-sink", {"ffi_zig"}, 1,100,4,0,reset,batch,finish},
@@ -134,6 +141,7 @@ int main(int argc, char **argv) {
         {"ruby/query-json-1", {"ffi_zig_cached"}, 1,1,6,0,reset,batch,finish},
         {"ruby/query-json-64", {"ffi_zig_cached"}, 1,64,7,0,reset,batch,finish},
         {"ruby/query-json-1024", {"ffi_zig_cached"}, 1,1024,8,0,reset,batch,finish},
+        {"ruby/sum-nested/64", {"ruby_loop","ffi_c_direct","ffi_zig_single_reader","ffi_zig_batch_reader"}, 4,64,9,0,reset,batch,finish},
     };
     bench_run(cases, sizeof cases / sizeof *cases, "mruby-allocf", 0, argc - 1, argv + 1);
 #ifdef DRBZ_PROFILE
