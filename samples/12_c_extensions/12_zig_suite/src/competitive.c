@@ -52,7 +52,7 @@ size_t drbc_count_dual(const unsigned char *bytes, size_t length) {
 }
 
 static __attribute__((noinline)) void
-scalar_block(float *x, float *y, const float *speed, size_t count,
+scalar_block(float *restrict x, float *restrict y, const float *restrict speed, size_t count,
              rival_random random, void *context) {
     for (size_t i = 0; i < count; ++i) {
         x[i] += speed[i];
@@ -63,7 +63,7 @@ scalar_block(float *x, float *y, const float *speed, size_t count,
 }
 
 static __attribute__((noinline)) size_t
-dense_both_wrap_run(float *x, float *y, const float *speed, size_t count,
+dense_both_wrap_run(float *restrict x, float *restrict y, const float *restrict speed, size_t count,
                     rival_random random, void *context) {
     size_t i = 0;
     for (; i < count; ++i) {
@@ -81,7 +81,7 @@ dense_both_wrap_run(float *x, float *y, const float *speed, size_t count,
  * 256-bit vector arguments cannot be passed by value without AVX. The spill/call
  * cost remains visible in the competition and is accepted only if size/perf win. */
 static __attribute__((noinline)) void
-mixed_repair(float *x, float *y, const floats8 *nx, const floats8 *ny,
+mixed_repair(float *restrict x, float *restrict y, const floats8 *nx, const floats8 *ny,
              const masks8 *wrap_x, const masks8 *wrap_y,
              rival_random random, void *context) {
     memcpy(x, nx, sizeof *nx);
@@ -92,7 +92,7 @@ mixed_repair(float *x, float *y, const floats8 *nx, const floats8 *ny,
     }
 }
 
-void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
+void drbc_stars_block(float *restrict x, float *restrict y, const float *restrict speed, size_t count,
                       rival_random random, void *context) {
     size_t i = 0;
     while (count - i >= 8) {
