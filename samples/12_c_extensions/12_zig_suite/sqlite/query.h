@@ -27,4 +27,10 @@ void drbz_query_cache_init(drbz_query_cache *, struct sqlite3 *);
 int drbz_query_cache_clear(drbz_query_cache *);
 drbz_query_result drbz_query_pack(drbz_query_cache *, const unsigned char *, size_t);
 void drbz_query_output(const drbz_query_cache *, const unsigned char **, size_t *, size_t *);
+/* Odin uses the identical C layout and packed representation so the same
+ * benchmark, allocator meter and Ruby consumer can compare it directly. */
+void drbo_query_cache_init(drbz_query_cache *, struct sqlite3 *);
+int drbo_query_cache_clear(drbz_query_cache *);
+drbz_query_result drbo_query_pack(drbz_query_cache *, const unsigned char *, size_t);
+void drbo_query_output(const drbz_query_cache *, const unsigned char **, size_t *, size_t *);
 #endif
