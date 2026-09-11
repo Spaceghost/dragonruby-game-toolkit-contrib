@@ -11,6 +11,13 @@ static void read_view(void *context, const void *source, size_t index, drbz_view
     (void)context;
     *view = ((const drbz_view *)source)[index];
 }
+struct read_stats { size_t calls, values; };
+static size_t read_views(void *raw, const void *source, size_t index, drbz_view *views, size_t capacity) {
+    struct read_stats *stats = raw;
+    ++stats->calls; stats->values += capacity;
+    memcpy(views, (const drbz_view *)source + index, capacity * sizeof *views);
+    return capacity;
+}
 
 struct host {
     pthread_t thread;
@@ -47,7 +54,6 @@ static void log_message(void *raw) {
 static void delay(void *raw, uint32_t milliseconds) {
     (void)raw;
     assert(milliseconds == 1000);
-    /* Exercise real cross-thread stop/join without sleeping a full second. */
     struct timespec duration = { 0, 1000000 };
     nanosleep(&duration, NULL);
 }
@@ -57,10 +63,21 @@ int main(void) {
     drbz_view root[] = { {1, 1e16, NULL, 0}, {2, 0, nested, 2}, {1, 3, NULL, 0} };
     double result = 777;
     assert(drbz_sum_tree(root, 3, read_view, NULL, &result) == 0 && result == 3);
+    struct read_stats stats = {0};
+    result = 777;
+    assert(drbz_sum_tree_batched(root, 3, read_views, &stats, &result) == 0 && result == 3);
+    assert(stats.calls == 3 && stats.values == 6); /* trailing root sibling is deliberately re-decoded */
+    drbz_view flat[64];
+    for (size_t i=0;i<64;++i) flat[i]=(drbz_view){1,(double)(i+1),NULL,0};
+    stats=(struct read_stats){0}; result=777;
+    assert(drbz_sum_tree_batched(flat,64,read_views,&stats,&result)==0 && result==2080);
+    assert(stats.calls==4 && stats.values==64);
     drbz_view cycle = {2, 0, NULL, 1};
     cycle.children = &cycle;
     result = 777;
     assert(drbz_sum_tree(&cycle, 1, read_view, NULL, &result) == 2 && result == 777);
+    stats=(struct read_stats){0}; result=777;
+    assert(drbz_sum_tree_batched(&cycle,1,read_views,&stats,&result)==2 && result==777);
     unsigned char output[64];
     size_t length = 0;
     assert(drbz_greeting(0, (const unsigned char *)"Zig", 3, output, sizeof output, &length) == 0);
@@ -84,6 +101,6 @@ int main(void) {
         assert(drbz_worker_running(&worker) == 0);
     }
     assert(host.creates == 101 && host.joins == 100);
-    printf("APPS_PROOF {\"native_thread_lifetimes\":100,\"failed_create_recovered\":true,\"ruby_vm_used_on_worker\":false}\n");
+    printf("APPS_PROOF {\"native_thread_lifetimes\":100,\"batched_flat_reader_calls\":4,\"failed_create_recovered\":true,\"ruby_vm_used_on_worker\":false}\n");
     return 0;
 }
