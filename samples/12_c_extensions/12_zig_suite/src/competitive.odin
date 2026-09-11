@@ -17,16 +17,27 @@ store_f32x8 :: #force_inline proc "contextless" (p: [^]f32, v: simd.f32x8) {
 	intrinsics.unaligned_store(cast(^simd.f32x8)p, v)
 }
 
+// Accumulate up to 255 32-byte blocks before reducing. Each u8 lane therefore
+// remains exact (<=255), while the scalar 32-lane widening cost is paid once per
+// ~8 KiB instead of once per block. This is deliberately ordinary Odin SIMD,
+// not a target-specific horizontal-sum intrinsic.
 count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
 	newline: simd.u8x32 = u8('\n')
 	one: simd.u8x32 = u8(1)
 	offset: uintptr = 0
 	total: uintptr = 0
 	for length - offset >= 32 {
-		value := load_u8x32(bytes[offset:])
-		hits := simd.lanes_eq(value, newline) & one
-		total += uintptr(simd.reduce_add_bisect(hits))
-		offset += 32
+		blocks := (length - offset) / 32
+		if blocks > 255 { blocks = 255 }
+		end := offset + blocks * 32
+		acc: simd.u8x32
+		for offset < end {
+			value := load_u8x32(bytes[offset:])
+			acc += simd.lanes_eq(value, newline) & one
+			offset += 32
+		}
+		lanes := simd.to_array(acc)
+		for lane in 0..<32 { total += uintptr(lanes[lane]) }
 	}
 	for offset < length {
 		if bytes[offset] == u8('\n') { total += 1 }
