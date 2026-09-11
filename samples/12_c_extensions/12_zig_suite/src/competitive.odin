@@ -14,7 +14,7 @@ load_f32x8 :: #force_inline proc "contextless" (p: [^]f32) -> simd.f32x8 {
 }
 
 store_f32x8 :: #force_inline proc "contextless" (p: [^]f32, v: simd.f32x8) {
-	_ = intrinsics.unaligned_store(cast(^simd.f32x8)p, v)
+	intrinsics.unaligned_store(cast(^simd.f32x8)p, v)
 }
 
 count_medium :: proc "contextless" (bytes: [^]u8, length: uintptr) -> uintptr #no_bounds_check {
