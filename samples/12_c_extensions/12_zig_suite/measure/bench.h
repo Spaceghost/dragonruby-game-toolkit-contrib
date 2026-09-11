@@ -9,10 +9,12 @@
 #include <string.h>
 #include <time.h>
 
+#define BENCH_MAX_VARIANTS 6
+
 typedef struct bench_case bench_case;
 struct bench_case {
     const char *name;
-    const char *variants[4];
+    const char *variants[BENCH_MAX_VARIANTS];
     unsigned variant_count;
     size_t size;
     int task, detail;
@@ -70,7 +72,7 @@ static void bench_run(const bench_case *cases, size_t count, const char *scope,
     size_t records = 0;
     for (size_t ci = 0; ci < count; ++ci) {
         const bench_case *c = cases + ci;
-        assert(c->variant_count > 0 && c->variant_count <= 4);
+        assert(c->variant_count > 0 && c->variant_count <= BENCH_MAX_VARIANTS);
         uint32_t case_seed = seed ^ (uint32_t)(ci * 65537 + 1);
         printf("{\"event\":\"case\",\"scope\":\"%s\",\"case\":\"%s\",\"size\":%zu,\"variants\":[", scope, c->name, c->size);
         for (unsigned v = 0; v < c->variant_count; ++v) printf("%s\"%s\"", v ? "," : "", c->variants[v]);
@@ -116,7 +118,7 @@ static void bench_run(const bench_case *cases, size_t count, const char *scope,
 #else
         uint32_t order_seed = case_seed;
         for (unsigned trial = 0; trial < trials; ++trial) {
-            unsigned order[4] = {0, 1, 2, 3};
+            unsigned order[BENCH_MAX_VARIANTS] = {0, 1, 2, 3, 4, 5};
             for (unsigned k = c->variant_count - 1; k > 0; --k) {
                 unsigned j = bench_random(&order_seed) % (k + 1), tmp = order[k]; order[k] = order[j]; order[j] = tmp;
             }
