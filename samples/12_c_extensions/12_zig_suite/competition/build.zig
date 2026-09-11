@@ -43,6 +43,16 @@ pub fn build(b: *std.Build) void {
     b.step("test", "Compare both rivals with independent/original oracles and guarded memory").dependOn(&run.step);
     const installed_tests = b.addInstallArtifact(tests, .{});
     b.step("build-tests", "Compile the test executable for source mutation checks").dependOn(&installed_tests.step);
+
+    const sweep_obj = object(b, "lf-sweep-c", b.path("lf_sweep.c"), target, optimize, &flags);
+    const sweep = b.addExecutable(.{ .name = "lf-sweep", .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }) });
+    sweep.root_module.addObject(sweep_obj);
+    sweep.root_module.addObject(c_tuned);
+    sweep.root_module.addObject(control);
+    sweep.root_module.linkLibrary(baseline);
+    sweep.root_module.linkLibrary(tuned);
+    b.installArtifact(sweep);
+
     b.installArtifact(tuned);
     b.getInstallStep().dependOn(&b.addInstallFile(c_tuned.getEmittedBin(), "lib/rival-c.o").step);
     for ([_]bool{ false, true }) |profile| {
