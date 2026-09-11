@@ -61,7 +61,12 @@ def odin_mutations(cpu: str, tests: bytes) -> None:
     text = original.read_text()
     mutations = (
         ('vector-newline', "newline: simd.u8x32 = u8('\\n')", "newline: simd.u8x32 = u8('\\r')", 45, 'RIVAL_COUNT_MISMATCH'),
-        ('lane-overflow', 'if pairs > 255 {', 'if pairs > 256 {', 45, 'RIVAL_COUNT_MISMATCH'),
+        # Odin's SIMD byte addition did not make 255->256 an observable defect on
+        # the pinned compiler, so that was not a valid mutation. Drop one of the
+        # two independently accumulated 32-byte halves instead: a real algorithm
+        # error that the unchanged corpus must catch.
+        ('drop-odd-accumulator', 'total += uintptr(ea[lane]) + uintptr(oa[lane])',
+         'total += uintptr(ea[lane])', 45, 'RIVAL_COUNT_MISMATCH'),
         ('star-direction', 'nx := vx + vs', 'nx := vx - vs', 46, 'RIVAL_STAR_MISMATCH'),
     )
     for name, old, new, code, diagnostic in mutations:
