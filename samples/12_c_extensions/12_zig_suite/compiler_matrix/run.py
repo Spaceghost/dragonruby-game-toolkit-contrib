@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, hashlib, json, os, pathlib, random, shutil, statistics, subprocess, sys, time
+import argparse, hashlib, json, os, pathlib, random, statistics, subprocess, sys, time
 
 ROOT = pathlib.Path(__file__).resolve().parent
 SUITE = ROOT.parent
@@ -20,29 +20,35 @@ COMMON = ["-std=c11","-D_DEFAULT_SOURCE","-D_POSIX_C_SOURCE=200809L","-ffp-contr
 def run(cmd, **kw): return subprocess.run(cmd, text=True, check=False, **kw)
 def sha256(path): return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
-def target_flags(cpu: str) -> list[str]:
-    if cpu == "native": return ["-march=native"]
+def target_flags(compiler: str, cpu: str) -> list[str]:
     machine = os.uname().machine
-    if machine in ("x86_64","amd64"): return ["-march=x86-64"]
-    if machine in ("aarch64","arm64"): return ["-march=armv8-a"]
-    raise SystemExit(f"unsupported machine {machine}")
+    if compiler == "zigcc":
+        if cpu == "native": return ["-mcpu=native"]
+        if machine in ("x86_64","amd64"): return ["-mcpu=x86_64"]
+        if machine in ("aarch64","arm64"): return ["-mcpu=generic"]
+    else:
+        if cpu == "native": return ["-march=native"] if machine in ("x86_64","amd64") else ["-mcpu=native"]
+        if machine in ("x86_64","amd64"): return ["-march=x86-64"]
+        if machine in ("aarch64","arm64"): return ["-march=armv8-a"]
+    raise SystemExit(f"unsupported compiler/target {compiler} {machine} {cpu}")
 
 def generate_reference(out: pathlib.Path) -> None:
     cmd=[sys.executable,str(SUITE/"tools/reference.py"),str(SUITE.parent/"04_handcrafted_extension_advanced/native/ext-bindings.c"),str(SUITE.parent/"03_native_pixel_arrays/app/ext.c"),str(out)]
     p=run(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
     if p.returncode: raise SystemExit(p.stdout)
 
-def compile_variant(name, cc, flags, outdir, generated):
+def compile_variant(name, compiler, cc, flags, outdir, generated):
     binary=outdir/f"bench-{name}"
     sources=[ROOT/"bench.c",SUITE/"src/competitive.c",SUITE/"tests/controls.c",generated,SUITE.parent/"02_intermediate/app/re.c"]
-    cmd=cc+COMMON+flags+target_flags(ARGS.cpu)+["-I",str(SUITE/"src"),"-I",str(SUITE.parent/"02_intermediate/app")]+[str(x) for x in sources]+["-lm","-o",str(binary)]
+    cpu_flags=target_flags(compiler, ARGS.cpu)
+    cmd=cc+COMMON+flags+cpu_flags+["-I",str(SUITE/"src"),"-I",str(SUITE.parent/"02_intermediate/app")]+[str(x) for x in sources]+["-lm","-o",str(binary)]
     times=[]; output=""
     for rep in range(3):
         start=time.perf_counter_ns(); p=run(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT); elapsed=time.perf_counter_ns()-start
         output=p.stdout; times.append(elapsed)
         if p.returncode:
             (outdir/f"build-{name}.log").write_text(output)
-            return None,{"name":name,"supported":False,"command":cmd,"build_ns":times,"log":output[-4000:]}
+            return None,{"name":name,"compiler":compiler,"supported":False,"command":cmd,"cpu_flags":cpu_flags,"build_ns":times,"log":output[-4000:]}
     (outdir/f"build-{name}.log").write_text(output)
     size=run(["size","-B",str(binary)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT).stdout
     (outdir/f"size-{name}.txt").write_text(size)
@@ -52,7 +58,7 @@ def compile_variant(name, cc, flags, outdir, generated):
     try:
         fields=size.strip().splitlines()[-1].split(); text,data,bss=map(int,fields[:3])
     except Exception: pass
-    return binary,{"name":name,"supported":True,"command":cmd,"build_ns":times,"build_median_ns":statistics.median(times),"file_bytes":binary.stat().st_size,"text_bytes":text,"data_bytes":data,"bss_bytes":bss,"sha256":sha256(binary)}
+    return binary,{"name":name,"compiler":compiler,"supported":True,"command":cmd,"cpu_flags":cpu_flags,"build_ns":times,"build_median_ns":statistics.median(times),"file_bytes":binary.stat().st_size,"text_bytes":text,"data_bytes":data,"bss_bytes":bss,"sha256":sha256(binary)}
 
 def compiler_version(cc):
     p=run(cc+["--version"],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
@@ -70,13 +76,13 @@ def parse_rows(text):
 def main():
     out=pathlib.Path(ARGS.output); out.mkdir(parents=True,exist_ok=True)
     generated=out/"original.c"; generate_reference(generated)
-    meta={"cpu_mode":ARGS.cpu,"machine":os.uname().machine,"platform":os.uname().sysname,"compiler_versions":{k:compiler_version(v) for k,v in COMPILERS.items()},"zig_version":run(["zig","version"],stdout=subprocess.PIPE).stdout.strip()}
+    meta={"cpu_mode":ARGS.cpu,"machine":os.uname().machine,"platform":os.uname().sysname,"compiler_versions":{k:compiler_version(v) for k,v in COMPILERS.items()},"target_flags":{k:target_flags(k,ARGS.cpu) for k in COMPILERS},"zig_version":run(["zig","version"],stdout=subprocess.PIPE).stdout.strip()}
     (out/"environment.json").write_text(json.dumps(meta,indent=2)+"\n")
     builds=[]; binaries={}
     for compiler,cc in COMPILERS.items():
         for profile,pflags in PROFILES.items():
             name=f"{compiler}-{profile}"
-            binary,record=compile_variant(name,cc,pflags,out,generated); builds.append(record)
+            binary,record=compile_variant(name,compiler,cc,pflags,out,generated); builds.append(record)
             if binary: binaries[name]=binary
     (out/"builds.json").write_text(json.dumps(builds,indent=2)+"\n")
     required={f"{c}-{p}" for c in COMPILERS for p in ("o2","o3","oz")}
@@ -111,7 +117,7 @@ def main():
     groups={}
     for row in observations: groups.setdefault((row["variant"],row["workload"]),[]).append(row["ns_per_op"])
     build_by={r["name"]:r for r in builds if r.get("supported")}
-    lines=["# C compiler/profile matrix","",f"CPU mode: `{ARGS.cpu}`. Same runner, identical C sources and target flags. Runtime medians use 33 interleaved observations per supported profile.","","| workload | variant | median ns/op | MAD | build median ms | text bytes |","| --- | --- | ---: | ---: | ---: | ---: |"]
+    lines=["# C compiler/profile matrix","",f"CPU mode: `{ARGS.cpu}`. Same runner and identical C sources; compiler-specific flags select the same baseline/native target class and are retained verbatim in builds.json. Runtime medians use 33 interleaved observations per supported profile.","","| workload | variant | median ns/op | MAD | build median ms | text bytes |","| --- | --- | ---: | ---: | ---: | ---: |"]
     summary=[]
     for workload in WORKLOADS:
         for variant in sorted(binaries):
