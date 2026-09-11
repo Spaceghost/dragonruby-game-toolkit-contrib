@@ -54,7 +54,7 @@ size_t drbc_count_dual(const unsigned char *bytes, size_t length) {
     return total;
 }
 
-/* Keep RNG calls and their register pressure out of the no-wrap loop. */
+/* Compact ordered exceptional loop. */
 static __attribute__((noinline)) void
 scalar_block(float *x, float *y, const float *speed, size_t count,
              rival_random random, void *context) {
@@ -66,23 +66,49 @@ scalar_block(float *x, float *y, const float *speed, size_t count,
     }
 }
 
+/* Continue scalar while every star wraps both axes. This turns a sustained
+ * all-wrap region into one ordered run instead of one helper call per block. */
+static __attribute__((noinline)) size_t
+dense_both_wrap_run(float *x, float *y, const float *speed, size_t count,
+                    rival_random random, void *context) {
+    size_t i = 0;
+    for (; i < count; ++i) {
+        const float nx = x[i] + speed[i];
+        const float ny = y[i] + speed[i];
+        if (!(nx > 1280.0f && ny > 720.0f)) break;
+        x[i] = random(context) * -1280.0f;
+        y[i] = random(context) * -720.0f;
+    }
+    return i;
+}
+
 void drbc_stars_block(float *x, float *y, const float *speed, size_t count,
                       rival_random random, void *context) {
     size_t i = 0;
-    for (; count - i >= 8; i += 8) {
+    while (count - i >= 8) {
         floats8 vx, vy, vs;
         memcpy(&vx, x + i, sizeof vx);
         memcpy(&vy, y + i, sizeof vy);
         memcpy(&vs, speed + i, sizeof vs);
         const floats8 nx = vx + vs, ny = vy + vs;
-        if (__builtin_reduce_or((nx > 1280.0f) | (ny > 720.0f))) {
-            /* Keep the exceptional path small and ordered, not eight copies.
-             * No array is updated before the first possible RNG callback. */
-            scalar_block(x + i, y + i, speed + i, 8, random, context);
-        } else {
+        const floats8 wrap_x = nx > 1280.0f;
+        const floats8 wrap_y = ny > 720.0f;
+        const floats8 wraps = wrap_x | wrap_y;
+        if (!__builtin_reduce_or(wraps)) {
             memcpy(x + i, &nx, sizeof nx);
             memcpy(y + i, &ny, sizeof ny);
+            i += 8;
+            continue;
         }
+        if (__builtin_reduce_and(wrap_x & wrap_y)) {
+            const size_t consumed = dense_both_wrap_run(x + i, y + i, speed + i,
+                                                        count - i, random, context);
+            i += consumed;
+            continue;
+        }
+        /* Preserve star order and x-before-y RNG consumption for mixed blocks. */
+        scalar_block(x + i, y + i, speed + i, 8, random, context);
+        i += 8;
     }
     if (i < count) scalar_block(x + i, y + i, speed + i, count - i, random, context);
 }
