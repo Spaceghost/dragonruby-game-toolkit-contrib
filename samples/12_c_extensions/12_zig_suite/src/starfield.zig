@@ -38,7 +38,6 @@ export fn drbz_starfield_storage_bytes(count: usize) usize {
 }
 
 fn nextRandom(field: *Starfield) f32 {
-    // xorshift64*: deterministic test/application state, no libc rand() lock/state.
     var x = field.rng_state;
     x ^= x >> 12;
     x ^= x << 25;
@@ -47,11 +46,6 @@ fn nextRandom(field: *Starfield) f32 {
     const mixed = x *% 0x2545F4914F6CDD1D;
     const top: u24 = @truncate(mixed >> 40);
     return @as(f32, @floatFromInt(top)) / 16777215.0;
-}
-
-fn randomCallback(context: ?*anyopaque) callconv(.c) f32 {
-    const field: *Starfield = @ptrCast(@alignCast(context.?));
-    return nextRandom(field);
 }
 
 export fn drbz_starfield_init(storage: ?*anyopaque, storage_bytes: usize, count: usize, seed: u64, out: *Starfield) c_int {
@@ -76,18 +70,18 @@ export fn drbz_starfield_init(storage: ?*anyopaque, storage_bytes: usize, count:
         y[i] = nextRandom(out) * -720.0;
         speed[i] = 1.0 + nextRandom(out) * 4.0;
     }
-    // Width, height and asset never vary per frame. Establish them once; the
-    // hot frame pack can thereafter write only the two coordinates.
     drbz_starfield_pack(out);
     return 0;
 }
 
 export fn drbz_starfield_update(field: *Starfield) void {
     if (field.len == 0) return;
-    rivals.starsBlock(field.x[0..field.len], field.y[0..field.len], field.speed[0..field.len], randomCallback, field);
+    // The starfield owns this RNG, so instantiate the same star algorithm with a
+    // direct compile-time-known RNG rather than paying an indirect callback on
+    // every wrapped coordinate. The public generic C ABI remains callback-based.
+    rivals.starsBlockWith(field.x[0..field.len], field.y[0..field.len], field.speed[0..field.len], field, nextRandom);
 }
 
-// Full public pack re-establishes the complete canonical sprite representation.
 export fn drbz_starfield_pack(field: *Starfield) void {
     for (0..field.len) |i| {
         field.sprites[i] = .{ .x = field.x[i], .y = field.y[i], .w = 4.0, .h = 4.0, .path_id = 1 };
@@ -106,8 +100,6 @@ export fn drbz_starfield_update_pack(field: *Starfield) void {
     packPositions(field);
 }
 
-// One native update, coordinate-only packing pass, one batch boundary. The sink
-// must consume borrowed records before returning and must not mutate/re-enter.
 export fn drbz_starfield_frame(field: *Starfield, sink: BatchSink, context: ?*anyopaque) void {
     drbz_starfield_update_pack(field);
     sink(context, field.sprites, field.len);
