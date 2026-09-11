@@ -20,18 +20,15 @@ pub fn countDual(bytes: []const u8) usize {
             even +%= @select(u8, a == newline, one, zero);
             odd +%= @select(u8, b == newline, one, zero);
         }
-        // Each lane <= 255; widened pair <= 510; the reduction <= 16320.
         const wide_even: @Vector(32, u16) = @intCast(even);
         const wide_odd: @Vector(32, u16) = @intCast(odd);
         total += @reduce(.Add, wide_even + wide_odd);
     }
     while (bytes.len - offset >= 32) {
         const value: V = bytes[offset..][0..32].*;
-        // One block has at most 32 hits, so byte reduction is exact.
         total += @reduce(.Add, @select(u8, value == newline, one, zero));
         offset += 32;
     }
-    // Two bounded vector fragments leave at most seven scalar tail bytes.
     inline for (.{ 16, 8 }) |width| {
         if (bytes.len - offset >= width) {
             const Tail = @Vector(width, u8);
@@ -45,11 +42,13 @@ pub fn countDual(bytes: []const u8) usize {
     return total;
 }
 
-// This is genuinely the exceptional path. The cold hint asks LLVM to favor
-// compact code instead of unrolling the callback-heavy scalar loop on ARM.
-noinline fn scalarBlock(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) void {
-    @branchHint(.cold);
+// Externally visible on purpose: keeping this tiny fallback as a real ABI
+// function prevents whole-unit argument specialization from turning the common
+// count=8 call site into an eight-copy ARM code balloon. It is also useful as a
+// direct scalar fallback for embeddings that need identical RNG ordering.
+export fn drbz_stars_scalar_fallback(x: [*c]f32, y: [*c]f32, speed: [*c]const f32, count: usize, random: Random, context: ?*anyopaque) void {
     @setFloatMode(.strict);
+    if (count == 0) return;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         x[i] += speed[i];
@@ -59,9 +58,6 @@ noinline fn scalarBlock(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize,
     }
 }
 
-// When a whole vector has both axes wrapping, continue scalar only while that
-// condition remains true. The all-wrap workload becomes one dense run instead
-// of paying vector detection plus an outlined call for every eight stars.
 noinline fn denseBothWrapRun(x: [*]f32, y: [*]f32, speed: [*]const f32, count: usize, random: Random, context: ?*anyopaque) usize {
     @setFloatMode(.strict);
     var i: usize = 0;
@@ -89,8 +85,7 @@ pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, contex
         const ny = vy + vs;
         const wrap_x = nx > max_x;
         const wrap_y = ny > max_y;
-        const wraps = wrap_x | wrap_y;
-        if (!@reduce(.Or, wraps)) {
+        if (!@reduce(.Or, wrap_x | wrap_y)) {
             x[i..][0..8].* = nx;
             y[i..][0..8].* = ny;
             i += 8;
@@ -98,15 +93,13 @@ pub fn starsBlock(x: []f32, y: []f32, speed: []const f32, random: Random, contex
         }
         if (@reduce(.And, wrap_x & wrap_y)) {
             const consumed = denseBothWrapRun(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
-            // The first eight lanes were proven dense, so progress is guaranteed.
             i += consumed;
             continue;
         }
-        // Preserve star order and x-before-y RNG consumption for mixed blocks.
-        scalarBlock(x.ptr + i, y.ptr + i, speed.ptr + i, 8, random, context);
+        drbz_stars_scalar_fallback(x.ptr + i, y.ptr + i, speed.ptr + i, 8, random, context);
         i += 8;
     }
-    if (i < x.len) scalarBlock(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
+    if (i < x.len) drbz_stars_scalar_fallback(x.ptr + i, y.ptr + i, speed.ptr + i, x.len - i, random, context);
 }
 
 export fn drbz_count_dual(bytes: [*c]const u8, length: usize) usize {
