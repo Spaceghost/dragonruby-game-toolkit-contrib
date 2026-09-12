@@ -28,7 +28,13 @@ begin FFI::Zig.starfield_draw(draw_sink,'sprites/tiny-star.png');raise 'expected
 FFI::Zig.sqlite_open(':memory:');FFI::Zig.sqlite_exec("create table q(v text); insert into q values ('{\"id\":1}'), (NULL), ('a'||char(0)||'b')");sql='select v from q order by rowid';expected=["{\"id\":1}",'null',"a\0b"];raise 'query_json first result' unless FFI::Zig.query_json(sql)==expected;raise 'query should prepare once' unless FFI::Zig.query_prepares==1&&FFI::Zig.query_hits==0;raise 'query_json cached result' unless FFI::Zig.query_json(sql)==expected;raise 'query should hit cache' unless FFI::Zig.query_prepares==1&&FFI::Zig.query_hits==1
 begin FFI::Zig.query_json('select from bad_sql');raise 'expected query error';rescue RuntimeError;end
 raise 'failed prepare evicted cache' unless FFI::Zig.query_json(sql)==expected;raise 'failed prepare changed counters' unless FFI::Zig.query_prepares==1&&FFI::Zig.query_hits==2;FFI::Zig.sqlite_close
-if defined?(FFI::Native)
+native_available = true
+begin
+  FFI::Native
+rescue NameError
+  native_available = false
+end
+if native_available
   %w[c zig odin].each do |name|
     raise "backend select #{name}" unless FFI::Native.use_backend(name)==name;raise "backend read #{name}" unless FFI::Native.backend==name;raise "native square #{name}" unless FFI::Native.square(-17)==289;raise "native LF #{name}" unless FFI::Native.count_newlines("\0\n\xff\n")==2;raise "native sum #{name}" unless FFI::Native.sum(*nested_sum)==3.0;raise "native greeting #{name}" unless FFI::Native.hello("a\0b")=="Hello a\0b!"
     report=FFI::Native.conformance;raise "native conformance version #{name}" unless report.include?('"abi_version":1');raise "native conformance backend #{name}" unless report.include?("\"backend\":\"#{name}\"");raise "native conformance renderer scope #{name}" unless report.include?('"renderer_batch_api":false')
