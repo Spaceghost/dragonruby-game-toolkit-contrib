@@ -7,6 +7,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+/* Odin's COFF object follows the MSVC convention of referencing this marker
+ * when floating-point code is present. Zig's freestanding-ish Windows link
+ * path does not otherwise provide it, so the portable host supplies the same
+ * conventional marker rather than changing Odin code generation. */
+int _fltused = 0x9875;
+#endif
+
 static uint32_t fbits(float x){uint32_t u;memcpy(&u,&x,sizeof u);return u;}static void compare(const drbn_backend_ops *a,const drbn_backend_ops *b){_Alignas(max_align_t)unsigned char sa[4096],sb[4096];drbz_starfield fa,fb;size_t na=a->starfield_storage_bytes(64),nb=b->starfield_storage_bytes(64);assert(na==nb&&na&&na<=sizeof sa);assert(a->starfield_init(sa,sizeof sa,64,UINT64_C(0x4d595df4d0f33173),&fa)==0);assert(b->starfield_init(sb,sizeof sb,64,UINT64_C(0x4d595df4d0f33173),&fb)==0);for(unsigned f=0;f<32;++f){a->starfield_update(&fa);b->starfield_update(&fb);}assert(fa.rng_state==fb.rng_state&&fa.len==fb.len);for(size_t i=0;i<fa.len;++i){assert(fbits(fa.x[i])==fbits(fb.x[i]));assert(fbits(fa.y[i])==fbits(fb.y[i]));assert(fbits(fa.speed[i])==fbits(fb.speed[i]));}}
 static void dynlib(void){
 #ifdef _WIN32
