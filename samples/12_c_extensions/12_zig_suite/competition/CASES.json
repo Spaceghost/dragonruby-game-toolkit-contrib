@@ -1,0 +1,20 @@
+{
+  "rival/lf/31": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/32": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/33-unaligned": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/63-unaligned": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/64": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/65-unaligned": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/4k": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/4k-all": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/4k-none": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/8k": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/16k": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/64k": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/1m-warm": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/lf/1m-rotating16m": ["c_scalar", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/stars/64-no-wrap": ["c_original", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/stars/16384-no-wrap": ["c_original", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/stars/16384-mixed": ["c_original", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"],
+  "rival/stars/4096-all-wrap": ["c_original", "zig_previous", "c_tuned", "zig_tuned", "odin_tuned"]
+}

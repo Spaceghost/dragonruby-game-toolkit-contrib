@@ -1,0 +1,65 @@
+name: C Zig Odin suite Ruby integration
+on:
+  pull_request:
+    paths: ['samples/12_c_extensions/12_zig_suite/**','samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb','docs/dragonruby-mruby.patch','.github/workflows/zig-suite-mruby.yml']
+  push:
+    branches: [main]
+    paths: ['samples/12_c_extensions/12_zig_suite/**','.github/workflows/zig-suite-mruby.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency:
+  group: zig-suite-mruby-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  ruby:
+    name: Suite Ruby (${{ matrix.flavor }}, ${{ matrix.boxing }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [upstream-3.4, dragonruby-3.0]
+        boxing: [word, nan, none]
+        include:
+          - {flavor: upstream-3.4, revision: a309524d0bc90eef077a24634db2495a6f68e318}
+          - {flavor: dragonruby-3.0, revision: 0f45836b5954accf508f333f932741b925214471}
+    env: {MRUBY_BOXING: '${{ matrix.boxing }}', MRUBY_FLAVOR: '${{ matrix.flavor }}', MRUBY_REVISION: '${{ matrix.revision }}'}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {repository: mruby/mruby, ref: '${{ matrix.revision }}', path: .ci-mruby, submodules: recursive, persist-credentials: false}
+      - name: Verify sources and prepare matching real VM
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci-mruby rev-parse HEAD)" = "$MRUBY_REVISION"; test -z "$(git -C .ci-mruby status --porcelain --untracked-files=all)"
+          test "$(git hash-object samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb)" = 26c9893094785dcc25c135c0fafb4fa266b3202c
+          if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then patch="$GITHUB_WORKSPACE/docs/dragonruby-mruby.patch"; test "$(git hash-object "$patch")" = bd85545b27f4c6397da251ca05ead018cecb9818; git -C .ci-mruby apply --check --index "$patch"; git -C .ci-mruby apply --index "$patch"; fi
+          export MRUBY_CONFIG="$GITHUB_WORKSPACE/samples/12_c_extensions/11_zig_native_pixel_arrays/tests/mruby_config.rb"; if ! (cd .ci-mruby && rake -j2 > "$RUNNER_TEMP/mruby-build.log" 2>&1); then tail -n 80 "$RUNNER_TEMP/mruby-build.log"; exit 1; fi
+      - name: Install checksum-pinned Zig and Odin
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o "$RUNNER_TEMP/zig.tar.xz"; echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check; tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"; echo "$RUNNER_TEMP/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+          curl --fail --location --retry 3 https://github.com/odin-lang/Odin/releases/download/dev-2026-09/odin-linux-amd64-dev-2026-09.tar.gz -o "$RUNNER_TEMP/odin.tar.gz"; echo "167c3e1d7056419dad2e04bb3bd98715b7ff286d4c125f3c5a5ee337c6254283  $RUNNER_TEMP/odin.tar.gz" | sha256sum --check; mkdir -p "$RUNNER_TEMP/odin"; tar -xzf "$RUNNER_TEMP/odin.tar.gz" -C "$RUNNER_TEMP/odin"; ODIN_BIN=$(find "$RUNNER_TEMP/odin" -type f -name odin -perm -111 -print -quit); echo "$(dirname "$ODIN_BIN")" >> "$GITHUB_PATH"; "$ODIN_BIN" version
+      - name: Build pinned Odin native and SQLite objects
+        working-directory: samples/12_c_extensions/12_zig_suite
+        run: |
+          python3 competition/build_odin.py --cpu baseline
+          python3 sqlite/build_odin.py --cpu baseline
+      - name: Execute one Ruby adapter against C Zig and Odin backends
+        working-directory: samples/12_c_extensions/12_zig_suite/bridge
+        run: |
+          set -euo pipefail
+          ruby -c smoke.rb; ruby -c ../app/main.rb; published=false; if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
+          for mode in Debug ReleaseSafe ReleaseFast; do log="$RUNNER_TEMP/suite-ruby-$mode.log"; zig build test -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dboxing="$MRUBY_BOXING" -Dpublished="$published" -Dbackend-neutral=true -Dodin-object=../competition/odin-out/competitive.o -Dodin-query-object=../sqlite/odin-out/query.o -Doptimize="$mode" -Dcpu=baseline --summary all 2>&1 | tee "$log"; test "$(grep -c '^RUBY_SUITE_PROOF ' "$log")" = 1; done
+      - name: Measure Ruby calls and actual VM allocator traffic
+        working-directory: samples/12_c_extensions/12_zig_suite
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/ruby-measurement-proof"; mkdir -p "$proof"; cp "$RUNNER_TEMP/mruby-build.log" "$proof/"; cp "$RUNNER_TEMP"/suite-ruby-*.log "$proof/"; { echo "mruby_revision=$MRUBY_REVISION"; echo "flavor=$MRUBY_FLAVOR boxing=$MRUBY_BOXING"; sha256sum "$GITHUB_WORKSPACE/.ci-mruby/build/host/lib/libmruby.a"; } > "$proof/vm-provenance.txt"
+          published=false; if [ "$MRUBY_FLAVOR" = dragonruby-3.0 ]; then published=true; fi
+          (cd measure && zig build -Dmruby-root="$GITHUB_WORKSPACE/.ci-mruby" -Dboxing="$MRUBY_BOXING" -Dpublished="$published" -Doptimize=ReleaseFast -Dcpu=baseline --summary all) 2>&1 | tee "$proof/build.log"
+          python3 tools/benchmark_evidence.py --kind ruby --processes 3 --trials 11 --min-ns 2000000 --output "$proof"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with: {name: 'measurement-ruby-${{ matrix.flavor }}-${{ matrix.boxing }}', path: '${{ runner.temp }}/ruby-measurement-proof', if-no-files-found: warn, retention-days: 30}

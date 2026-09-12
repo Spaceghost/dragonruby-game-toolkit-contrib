@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "abi_version": 1,
+  "pointer_models": ["lp64", "llp64"],
+  "backends": {
+    "c": {"prefix": "drbc", "kind": "native_peer"},
+    "zig": {"prefix": "drbz", "kind": "native_peer"},
+    "odin": {"prefix": "drbo", "kind": "native_peer"}
+  },
+  "types": {
+    "drbz_star": {"fields": ["f32 x", "f32 y", "f32 s"], "size_64": 12, "align_64": 4},
+    "drbz_scanner": {"fields": ["i32 position", "i32 increment", "i32 previous", "u32 pixels[100]"], "size_64": 412, "align_64": 4},
+    "drbz_view": {"fields": ["i32 kind", "f64 number", "ptr children", "size_t length"], "size_64": 32, "align_64": 8},
+    "drbz_packed_sprite": {"fields": ["f32 x", "f32 y", "f32 w", "f32 h", "uintptr_t path_id"], "size_64": 24, "align_64": 8},
+    "drbz_starfield": {"fields": ["ptr x", "ptr y", "ptr speed", "ptr sprites", "size_t len", "u64 rng_state"], "size_64": 48, "align_64": 8},
+    "drbz_query_cache": {"size_64": 88, "align_64": 8},
+    "drbz_query_result": {"size_64": 24, "align_64": 8}
+  },
+  "operations": {
+    "square": {"parity": "required", "symbols": {"c": "drbc_square", "zig": "drbz_square", "odin": "drbo_square"}},
+    "squares": {"parity": "required", "symbols": {"c": "drbc_squares", "zig": "drbz_squares", "odin": "drbo_squares"}},
+    "sum_ordered": {"parity": "required", "symbols": {"c": "drbc_sum_ordered", "zig": "drbz_sum_ordered", "odin": "drbo_sum_ordered"}},
+    "sum_unrolled": {"parity": "required", "symbols": {"c": "drbc_sum_unrolled", "zig": "drbz_sum_unrolled", "odin": "drbo_sum_unrolled"}},
+    "stars_scalar": {"parity": "required", "symbols": {"c": "drbc_stars_scalar", "zig": "drbz_stars_scalar", "odin": "drbo_stars_scalar"}},
+    "stars_soa": {"parity": "required", "symbols": {"c": "drbc_stars_soa", "zig": "drbz_stars_soa", "odin": "drbo_stars_soa"}},
+    "count_scalar": {"parity": "required", "symbols": {"c": "drbc_count_scalar", "zig": "drbz_count_scalar", "odin": "drbo_count_scalar"}},
+    "count_fast": {"parity": "required", "symbols": {"c": "drbc_count_dual", "zig": "drbz_count_dual", "odin": "drbo_count_dual"}},
+    "scanner": {"parity": "required", "symbols": {"c": ["drbc_scanner_reset", "drbc_scanner_frame"], "zig": ["drbz_scanner_reset", "drbz_scanner_frame"], "odin": ["drbo_scanner_reset", "drbo_scanner_frame"]}},
+    "sum_tree": {"parity": "required", "symbols": {"c": "drbc_sum_tree", "zig": "drbz_sum_tree", "odin": "drbo_sum_tree"}},
+    "sum_tree_batched": {"parity": "required", "symbols": {"c": "drbc_sum_tree_batched", "zig": "drbz_sum_tree_batched", "odin": "drbo_sum_tree_batched"}},
+    "greeting": {"parity": "required", "symbols": {"c": "drbc_greeting", "zig": "drbz_greeting", "odin": "drbo_greeting"}},
+    "persistent_starfield": {"parity": "required", "symbols": {"c": "drbc_starfield_*", "zig": "drbz_starfield_*", "odin": "drbo_starfield_*"}},
+    "query_cache": {"parity": "required", "symbols": {"c": "drbc_query_*", "zig": "drbz_query_*", "odin": "drbo_query_*"}, "engine": "sqlite3"},
+    "worker_wait_wake": {"parity": "required", "symbols": {"c": "host_adapter", "zig": "drbz_wait_worker_*", "odin": "drbo_wait_worker_*"}},
+    "regex": {"parity": "intentional_shared_dependency", "c": "tiny-regex-c/original oracle", "zig": "ported dialect", "odin": null, "reason": "Regex expansion was explicitly de-prioritized; the vetted C implementation remains the shared dependency rather than manufacturing a third port."},
+    "renderer": {"parity": "host_boundary", "reason": "Renderer submission remains a DragonRuby host operation; native languages own state/update, not SDK object creation."},
+    "steamworks": {"parity": "platform_boundary", "reason": "Adapter is compiled only with the licensed Steamworks SDK."},
+    "jni": {"parity": "platform_boundary", "reason": "JNI lifecycle/attach helpers are portable; final Java class registration is app/package specific."},
+    "apple_main_thread": {"parity": "platform_boundary", "reason": "libdispatch adapter is shared host code, not duplicated language logic."}
+  },
+  "promotion_rules": {
+    "semantic_parity": "mandatory",
+    "mutation_detection": "mandatory for optimized kernels",
+    "allocation_regression": "reject unless explicitly scoped and justified",
+    "runtime": "compare paired medians; shared-runner timing is observational, not a hard portable threshold",
+    "code_size": "retain symbol/object evidence",
+    "source_complexity": "nonblank noncomment logical lines and bytes are reported, not used as a fake single quality score",
+    "assembly_complexity": "instruction/call/branch counts are reported as mechanical proxies",
+    "pareto": "never collapse runtime, size, compile time, allocations, source complexity and architecture consistency into one weighted score"
+  }
+}

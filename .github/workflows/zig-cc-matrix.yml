@@ -1,0 +1,112 @@
+name: Clang versus zig-cc matrix
+
+on:
+  pull_request:
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - 'samples/12_c_extensions/01_basics/**'
+      - 'samples/12_c_extensions/02_intermediate/**'
+      - 'samples/12_c_extensions/03_native_pixel_arrays/**'
+      - 'samples/12_c_extensions/04_handcrafted_extension_advanced/**'
+      - '.github/workflows/zig-cc-matrix.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-cc-matrix.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zig-cc-matrix-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compiler-matrix:
+    name: C compilers (${{ matrix.runner }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            archive: x86_64-linux
+            target: x86_64-linux-gnu
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            cpu: baseline
+          - runner: ubuntu-24.04
+            archive: x86_64-linux
+            target: x86_64-linux-gnu
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            cpu: native
+          - runner: ubuntu-24.04-arm
+            archive: aarch64-linux
+            target: aarch64-linux-gnu
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+            cpu: native
+          - runner: windows-2022
+            archive: x86_64-windows
+            target: x86_64-windows-gnu
+            sha256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e
+            cpu: native
+          - runner: macos-15
+            archive: aarch64-macos
+            target: aarch64-macos
+            sha256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+            cpu: native
+          - runner: macos-15-intel
+            archive: x86_64-macos
+            target: x86_64-macos
+            sha256: 0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7
+            cpu: native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned Zig
+        shell: python
+        env:
+          ZIG_ARCHIVE: ${{ matrix.archive }}
+          ZIG_SHA256: ${{ matrix.sha256 }}
+        run: |
+          import hashlib, os, pathlib, shutil, tarfile, time, urllib.request, zipfile
+          version='0.16.0'; temp=pathlib.Path(os.environ['RUNNER_TEMP']); stem=f"zig-{os.environ['ZIG_ARCHIVE']}-{version}"; suffix='.zip' if os.name=='nt' else '.tar.xz'; archive=temp/(stem+suffix)
+          url=f'https://ziglang.org/download/{version}/{archive.name}'
+          for attempt in range(3):
+              try:
+                  with urllib.request.urlopen(url,timeout=60) as r, archive.open('wb') as f: shutil.copyfileobj(r,f)
+                  break
+              except OSError:
+                  if attempt==2: raise
+                  time.sleep(attempt+1)
+          if hashlib.sha256(archive.read_bytes()).hexdigest()!=os.environ['ZIG_SHA256']: raise SystemExit('Zig archive checksum mismatch')
+          if suffix=='.zip': zipfile.ZipFile(archive).extractall(temp)
+          else: tarfile.open(archive).extractall(temp,filter='data')
+          with open(os.environ['GITHUB_PATH'],'a',encoding='utf-8') as f: f.write(str(temp/stem)+'\n')
+      - name: Compile and interleave all C profiles
+        working-directory: samples/12_c_extensions/12_zig_suite/compiler_matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/compiler-matrix"
+          mkdir -p "$out"
+          clang --version | tee "$out/host-clang.txt"
+          zig cc --version | tee "$out/zig-cc.txt"
+          python3 run.py --cpu '${{ matrix.cpu }}' --output "$out" --min-ns 2000000 | tee "$out/stdout-report.md"
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import hashlib, pathlib, os
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'compiler-matrix'
+          with (out/'SHA256SUMS.txt').open('w') as f:
+              for name in ('raw.jsonl','summary.json','builds.json','environment.json'):
+                  p=out/name; f.write(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {name}\n")
+          PY
+      - name: Retain compiler matrix
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: compiler-matrix-${{ matrix.runner }}-${{ matrix.cpu }}
+          path: ${{ runner.temp }}/compiler-matrix
+          if-no-files-found: warn
+          retention-days: 30

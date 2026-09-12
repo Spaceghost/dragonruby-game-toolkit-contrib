@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "target": "bpf-capsule",
+  "upstream": {
+    "repository": "ayles/bpf-capsule",
+    "commit": "7f18727c2adee960b71612c205d3194cd7f9a34a",
+    "llvm_major": 23
+  },
+  "purpose": "Measure whether the same semantic kernels survive verifier-constrained execution, not which language wins native code generation.",
+  "phases": [
+    "frontend",
+    "capsule-transform",
+    "bpf-object",
+    "kernel-load",
+    "execution",
+    "semantic-parity"
+  ],
+  "participants": {
+    "c_tuned": {
+      "source": "../../src/competitive.c",
+      "status": "implemented",
+      "current_workloads": ["rival/lf/* <= 64KiB"]
+    },
+    "zig_tuned": {
+      "source": "../../src/competitive.zig",
+      "status": "planned",
+      "constraint": "must produce LLVM-23-compatible bitcode without replacing the Zig implementation with a C translation"
+    },
+    "odin_tuned": {
+      "source": "../../src/competitive.odin",
+      "status": "probe",
+      "constraint": "current Odin emits textual LLVM IR; assemble only if its emitted IR is accepted by LLVM 23, and report incompatibility as a target result"
+    }
+  },
+  "metrics": [
+    "semantic_result",
+    "frontend_time_ns",
+    "capsule_link_time_ns",
+    "bpf_object_bytes",
+    "kernel_load_result",
+    "kernel_execution_ns",
+    "continuations",
+    "native_to_capsule_ratio"
+  ],
+  "rules": {
+    "native_semantics_remain_authoritative": true,
+    "unsupported_is_a_result": true,
+    "no_target_specific_reimplementation": true,
+    "no_single_weighted_score": true,
+    "privileged_runtime_results_must_name_kernel_and_architecture": true
+  }
+}

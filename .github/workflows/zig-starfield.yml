@@ -1,0 +1,115 @@
+name: Zig Odin persistent starfield evidence
+
+on:
+  pull_request:
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-starfield.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - '.github/workflows/zig-starfield.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zig-starfield-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  starfield:
+    name: Starfield stages (${{ matrix.os }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            cpu: baseline
+            odin_archive: odin-linux-amd64-dev-2026-09.tar.gz
+            odin_sha256: 167c3e1d7056419dad2e04bb3bd98715b7ff286d4c125f3c5a5ee337c6254283
+          - os: ubuntu-24.04
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+            cpu: native
+            odin_archive: odin-linux-amd64-dev-2026-09.tar.gz
+            odin_sha256: 167c3e1d7056419dad2e04bb3bd98715b7ff286d4c125f3c5a5ee337c6254283
+          - os: ubuntu-24.04-arm
+            archive: aarch64-linux
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+            cpu: native
+            odin_archive: odin-linux-arm64-dev-2026-09.tar.gz
+            odin_sha256: c150c6f2d13668f3a1c4116ef96ea85c1ba1c9ededfd76081cd3c7d4ba92aa91
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install pinned Zig and Odin
+        shell: bash
+        env:
+          ODIN_ARCHIVE: ${{ matrix.odin_archive }}
+          ODIN_SHA256: ${{ matrix.odin_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/odin-release"
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-${{ matrix.archive }}-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "${{ matrix.sha256 }}  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-${{ matrix.archive }}-0.16.0" >> "$GITHUB_PATH"
+          curl --fail --location --retry 3 "https://github.com/odin-lang/Odin/releases/download/dev-2026-09/$ODIN_ARCHIVE" -o "$RUNNER_TEMP/odin.tar.gz"
+          echo "$ODIN_SHA256  $RUNNER_TEMP/odin.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/odin.tar.gz" -C "$RUNNER_TEMP/odin-release"
+          ODIN_BIN="$(find "$RUNNER_TEMP/odin-release" -type f -name odin -perm -111 -print -quit)"
+          test -n "$ODIN_BIN"
+          echo "$(dirname "$ODIN_BIN")" >> "$GITHUB_PATH"
+          "$ODIN_BIN" version
+      - name: Build pinned Odin native package
+        working-directory: samples/12_c_extensions/12_zig_suite/starfield
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ../competition/build_odin.py --cpu "${{ matrix.cpu }}"
+      - name: Correctness in all Zig safety modes
+        working-directory: samples/12_c_extensions/12_zig_suite/starfield
+        shell: bash
+        run: |
+          set -euo pipefail
+          for mode in Debug ReleaseSafe ReleaseFast; do
+            zig build check -Doptimize="$mode" -Dcpu=${{ matrix.cpu }} --summary all
+          done
+      - name: Measure matched Zig and Odin stages
+        working-directory: samples/12_c_extensions/12_zig_suite/starfield
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/starfield"
+          mkdir -p "$out"
+          zig build install -Doptimize=ReleaseFast -Dcpu=${{ matrix.cpu }} --summary all 2>&1 | tee "$out/build.log"
+          zig build run -Doptimize=ReleaseFast -Dcpu=${{ matrix.cpu }} -- 11 2000000 2>&1 | tee "$out/raw.jsonl"
+          python3 validate.py < "$out/raw.jsonl" | tee "$out/report.md"
+          nm -u zig-out/lib/libstarfield_native.a > "$out/zig-undefined-symbols.txt" || true
+          nm -u zig-out/lib/starfield-odin.o > "$out/odin-undefined-symbols.txt" || true
+          for file in "$out/zig-undefined-symbols.txt" "$out/odin-undefined-symbols.txt"; do
+            if grep -E '(^|[[:space:]])(malloc|calloc|realloc|aligned_alloc|posix_memalign|free)$' "$file"; then
+              echo "unexpected allocator import in $file" >&2
+              exit 1
+            fi
+          done
+          nm -S --size-sort zig-out/lib/libstarfield_native.a > "$out/zig-symbol-sizes.txt" || true
+          nm -S --size-sort zig-out/lib/starfield-odin.o > "$out/odin-symbol-sizes.txt" || true
+          objdump -dr zig-out/lib/libstarfield_native.a > "$out/zig-disassembly.txt" || true
+          objdump -dr zig-out/lib/starfield-odin.o > "$out/odin-disassembly.txt" || true
+          (cd "$out" && sha256sum raw.jsonl report.md build.log *symbols.txt *sizes.txt *disassembly.txt > SHA256SUMS.txt)
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain starfield evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: starfield-${{ matrix.os }}-${{ matrix.cpu }}
+          path: ${{ runner.temp }}/starfield
+          if-no-files-found: warn
+          retention-days: 30

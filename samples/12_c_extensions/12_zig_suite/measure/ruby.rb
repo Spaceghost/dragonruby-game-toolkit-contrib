@@ -1,0 +1,210 @@
+# Parsed once before measurements. Inputs persist; result construction and normal
+# automatic GC remain part of each Ruby batch. No proprietary renderer is used.
+module Measure
+  TEXT = ("a" * 15 + "\n") * 8
+  NUMBERS = (1..64).to_a
+  NESTED_NUMBERS = NUMBERS.each_slice(8).map { |slice| [slice[0, 4], slice[4, 4]] }
+  NAME = "x" * 128
+  HAYSTACK = "x" * 4090 + "needle"
+  PATTERN = "needle"
+  MASK = 0x3fffffff
+  QUERY_1 = "select v from q order by rowid limit 1"
+  QUERY_64 = "select v from q order by rowid limit 64"
+  QUERY_1024 = "select v from q order by rowid limit 1024"
+  STAR_PATH = 'sprites/tiny-star.png'
+
+  class DrawSink
+    attr_reader :calls
+    def initialize; @calls = 0; end
+    def reset; @calls = 0; end
+    def draw_sprite(x, y, w, h, path)
+      raise 'star sink' unless w == 4.0 && h == 4.0 && path == STAR_PATH && x.is_a?(Numeric) && y.is_a?(Numeric)
+      @calls += 1
+      nil
+    end
+  end
+  DRAW_SINK = DrawSink.new
+
+  def self.lf_ruby(n)
+    i = 0; checksum = 0
+    while i < n
+      j = 0; found = 0
+      while j < TEXT.length
+        found += 1 if TEXT.getbyte(j) == 10
+        j += 1
+      end
+      checksum = (checksum + found) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.lf_zig(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.count_newlines(TEXT)) & MASK
+      i += 1
+    end
+    checksum
+  end
+
+  def self.sum_ruby(n)
+    i = 0; checksum = 0
+    while i < n
+      j = 0; result = 0.0
+      while j < NUMBERS.length
+        result += NUMBERS[j]
+        j += 1
+      end
+      checksum = (checksum + result.to_i) & MASK
+      i += 1
+    end
+    checksum
+  end
+  def self.sum_c_direct(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_c_direct(NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.sum_zig_single(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_single_reader(NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.sum_zig_batch(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum(NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+
+  def self.sum_nested_ruby_values(values)
+    result = 0.0; i = 0
+    while i < values.length
+      value = values[i]
+      result += value.is_a?(Array) ? sum_nested_ruby_values(value) : value
+      i += 1
+    end
+    result
+  end
+  def self.sum_nested_ruby(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + sum_nested_ruby_values(NESTED_NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.sum_nested_c_direct(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_c_direct(NESTED_NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.sum_nested_zig_single(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum_single_reader(NESTED_NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.sum_nested_zig_batch(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.sum(NESTED_NUMBERS).to_i) & MASK; i += 1
+    end
+    checksum
+  end
+
+  def self.hello_ruby(n)
+    i = 0; checksum = 0
+    while i < n
+      result = "Hello " + NAME + "!"
+      checksum = (checksum + result.length + result.getbyte(6)) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.hello_zig(n)
+    i = 0; checksum = 0
+    while i < n
+      result = FFI::Zig.hello(NAME)
+      checksum = (checksum + result.length + result.getbyte(6)) & MASK; i += 1
+    end
+    checksum
+  end
+
+  def self.literal_ruby(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + HAYSTACK.index(PATTERN)) & MASK; i += 1
+    end
+    checksum
+  end
+  def self.literal_zig(n)
+    i = 0; checksum = 0
+    while i < n
+      checksum = (checksum + FFI::Zig.regex_index(PATTERN, HAYSTACK)) & MASK; i += 1
+    end
+    checksum
+  end
+
+  def self.scanner(n)
+    i = 0
+    while i < n
+      FFI::Zig.update_scanner_texture; i += 1
+    end
+    i
+  end
+  def self.envelope(n)
+    i = 0
+    while i < n; i += 1; end
+    i
+  end
+
+  def self.query_loop(sql, n)
+    i = 0; checksum = 0
+    while i < n
+      result = FFI::Zig.query_json(sql)
+      checksum = (checksum + result.length + result[0].length + result[result.length - 1].length) & MASK
+      i += 1
+    end
+    checksum
+  end
+  def self.query_1(n); query_loop(QUERY_1, n); end
+  def self.query_64(n); query_loop(QUERY_64, n); end
+  def self.query_1024(n); query_loop(QUERY_1024, n); end
+
+  def self.starfield_prepare(count)
+    FFI::Zig.starfield_reset(count)
+    DRAW_SINK.reset
+    0
+  end
+  def self.starfield_native(n)
+    i = 0
+    while i < n
+      FFI::Zig.starfield_draw(DRAW_SINK, STAR_PATH)
+      i += 1
+    end
+    DRAW_SINK.calls
+  end
+end
+raise 'greeting mismatch' unless FFI::Zig.hello(Measure::NAME) == "Hello " + Measure::NAME + "!"
+raise 'sum mismatch' unless FFI::Zig.sum(Measure::NUMBERS) == 2080.0
+raise 'single-reader sum mismatch' unless FFI::Zig.sum_single_reader(Measure::NUMBERS) == 2080.0
+raise 'direct-C sum mismatch' unless FFI::Zig.sum_c_direct(Measure::NUMBERS) == 2080.0
+raise 'nested batched sum mismatch' unless FFI::Zig.sum(Measure::NESTED_NUMBERS) == 2080.0
+raise 'nested direct-C sum mismatch' unless FFI::Zig.sum_c_direct(Measure::NESTED_NUMBERS) == 2080.0
+raise 'LF mismatch' unless FFI::Zig.count_newlines(Measure::TEXT) == 8
+raise 'literal mismatch' unless FFI::Zig.regex_index(Measure::PATTERN, Measure::HAYSTACK) == 4090
+
+FFI::Zig.sqlite_open(':memory:')
+FFI::Zig.sqlite_exec("create table q(v text); with recursive n(x) as (values(1) union all select x+1 from n where x<1024) insert into q select printf('row-%04d',x) from n")
+[[Measure::QUERY_1, 1], [Measure::QUERY_64, 64], [Measure::QUERY_1024, 1024]].each do |sql, count|
+  result = FFI::Zig.query_json(sql)
+  raise 'query fixture mismatch' unless result.length == count && result[0].length == 8 && result[result.length - 1].length == 8
+end

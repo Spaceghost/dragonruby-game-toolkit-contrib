@@ -1,0 +1,109 @@
+name: Zig native sample suite
+
+on:
+  pull_request:
+    paths:
+      - '**/*.c'
+      - '**/*.h'
+      - '**/*.m'
+      - '**/*.mm'
+      - '**/*.cc'
+      - '**/*.cpp'
+      - '**/*.cxx'
+      - '**/*.hpp'
+      - 'samples/12_c_extensions/12_zig_suite/**'
+      - 'samples/12_c_extensions/11_zig_native_pixel_arrays/app/native.zig'
+      - '.github/workflows/zig-suite.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'samples/12_c_extensions/**'
+      - '.github/workflows/zig-suite.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: zig-suite-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  inventory:
+    name: Audit native sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python samples/12_c_extensions/12_zig_suite/tools/inventory.py
+      - name: Reject invalid benchmark evidence
+        run: python samples/12_c_extensions/12_zig_suite/tools/test_report.py -v
+
+  portable:
+    name: Portable kernels (${{ matrix.runner }}, ${{ matrix.cpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cpu: baseline
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04
+            cpu: native
+            archive: x86_64-linux
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - runner: ubuntu-24.04-arm
+            cpu: native
+            archive: aarch64-linux
+            sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+    defaults:
+      run:
+        working-directory: samples/12_c_extensions/12_zig_suite
+        shell: bash
+    env:
+      ZIG_CPU: ${{ matrix.cpu }}
+      ZIG_OPTIMIZE: ReleaseFast
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install checksum-pinned Zig
+        env:
+          ZIG_ARCHIVE: ${{ matrix.archive }}
+          ZIG_SHA256: ${{ matrix.sha256 }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 "https://ziglang.org/download/0.16.0/zig-$ZIG_ARCHIVE-0.16.0.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-$ZIG_ARCHIVE-0.16.0" >> "$GITHUB_PATH"
+      - name: Verify original source pins
+        run: |
+          test "$(git hash-object ../01_basics/app/ext.c)" = a0879197d57a50d50ea8a7838e2771f826dc0210
+          test "$(git hash-object ../02_intermediate/app/re.c)" = 2d64d9f3e941af2a670a4176615f71173a33fb92
+          test "$(git hash-object ../02_intermediate/app/re.h)" = fb2d0028f039138701e2d9bce2a39a4c2d54e426
+      - name: Debug parity and bounds
+        run: zig build test -Doptimize=Debug -Dcpu="$ZIG_CPU" --summary all
+      - name: ReleaseSafe parity and bounds
+        run: zig build test -Doptimize=ReleaseSafe -Dcpu="$ZIG_CPU" --summary all
+      - name: ReleaseFast parity and interleaved measurements
+        run: |
+          set -euo pipefail
+          python tools/measure.py kernels --cpu "$ZIG_CPU" --output "$RUNNER_TEMP/zig-bench.log"
+          python tools/report.py "$RUNNER_TEMP/zig-bench.log"
+      - name: Real SQLite lifecycle and matched reuse measurements
+        run: |
+          set -euo pipefail
+          if ! pkg-config --exists sqlite3; then
+            sudo apt-get update
+            sudo apt-get install -y libsqlite3-dev
+          fi
+          for mode in Debug ReleaseSafe; do
+            (cd sqlite && zig build test -Doptimize="$mode" -Dcpu="$ZIG_CPU" --summary all)
+          done
+          python tools/measure.py sqlite --cpu "$ZIG_CPU" --output "$RUNNER_TEMP/sqlite-ReleaseFast.log"
+          python tools/report.py "$RUNNER_TEMP/sqlite-ReleaseFast.log"

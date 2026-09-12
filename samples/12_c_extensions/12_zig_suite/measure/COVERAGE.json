@@ -1,0 +1,18 @@
+{
+  "measure/bench.h": "Adaptive timing and allocation-report harness; test-only C, not a Zig port",
+  "measure/meter.h": "Measurement-only allocator counter contract",
+  "measure/libc_meter.c": "GNU linker-wrapped libc allocator counters and exercised positive/failure controls",
+  "measure/noop.c": "Separately compiled call-envelope control; never subtracted from timings",
+  "measure/native.c": "Native workload timing, differential checks and scoped allocation guard",
+  "measure/sqlite.c": "Real SQLite allocation profiling, retained wrapper controls and direct-operation comparisons",
+  "measure/sqlite_direct.c": "Independent direct-C batch control with matched error and cleanup semantics; not original sample code",
+  "measure/query_control.c": "Matched C prepare-each and cached packed-row controls for the Zig query cache",
+  "measure/ruby.c": "Real mruby allocator-hook profiling and Ruby-to-Zig batch timing through the test adapter",
+  "src/competitive.h": "Shared native contracts for matched C and Zig performance candidates",
+  "src/competitive.c": "Readable Clang-vector C candidates receiving the same algorithmic optimizations as Zig",
+  "sqlite/query.h": "Cached prepared-query and packed first-column output ABI",
+  "competition/test.c": "Independent LF specification, original-star differential tests and guarded-memory checks for both rivals",
+  "competition/bench.c": "Matched C/Zig competition with frozen controls and separately profiled allocations",
+  "compiler_matrix/bench.c": "Same-source host-Clang versus zig-cc compiler/profile runtime harness",
+  "starfield/bench.c": "Persistent starfield update/pack/single-sink benchmark"
+}
