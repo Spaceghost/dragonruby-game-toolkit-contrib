@@ -21,14 +21,14 @@ static uint64_t scalar_count(const unsigned char *bytes, size_t length) {
 static int read_input(const char *path, unsigned char *bytes, size_t *length) {
     FILE *file = fopen(path, "rb");
     if (!file) return -1;
-    size_t used = fread(bytes, 1, RIVAL_CAPSULE_MAX_INPUT + 1u, file);
+    size_t used = fread(bytes, 1, RIVAL_CAPSULE_MAX_INPUT, file);
     if (ferror(file)) {
         fclose(file);
         return -1;
     }
     int extra = fgetc(file);
     fclose(file);
-    if (used > RIVAL_CAPSULE_MAX_INPUT || extra != EOF) {
+    if (extra != EOF) {
         errno = EFBIG;
         return -1;
     }
