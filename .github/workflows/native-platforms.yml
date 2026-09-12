@@ -1,0 +1,64 @@
+name: Native C Zig Odin platform execution
+on:
+  pull_request:
+    paths: ['samples/12_c_extensions/12_zig_suite/**','.github/workflows/native-platforms.yml']
+  push:
+    branches: [main]
+    paths: ['samples/12_c_extensions/12_zig_suite/**','.github/workflows/native-platforms.yml']
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency: {group: 'native-platforms-${{ github.event.pull_request.number || github.ref }}', cancel-in-progress: true}
+jobs:
+  portable:
+    name: Native execution (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: windows-2022, zig_archive: x86_64-windows, zig_sha: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e, odin_archive: odin-windows-amd64-dev-2026-09.zip, odin_sha: 8ed8abd95b82e0af1eb7e86cb75f380fd8bde104947721817b35929f5fc19388}
+          - {runner: macos-15, zig_archive: aarch64-macos, zig_sha: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489, odin_archive: odin-macos-arm64-dev-2026-09.tar.gz, odin_sha: 3e6cbc1f247d8d14fe02c3151272d0a5b8d6d77acb7219f5b62914e4d95d97f7}
+          - {runner: macos-15-intel, zig_archive: x86_64-macos, zig_sha: 0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7, odin_archive: odin-macos-amd64-dev-2026-09.tar.gz, odin_sha: c1f6d6320218ec7e511093a87bdd599b72a8417a9d2a00de2c9691103562165b}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install checksum-pinned Zig and Odin
+        shell: python
+        env: {ZIG_ARCHIVE: '${{ matrix.zig_archive }}', ZIG_SHA: '${{ matrix.zig_sha }}', ODIN_ARCHIVE: '${{ matrix.odin_archive }}', ODIN_SHA: '${{ matrix.odin_sha }}'}
+        run: |
+          import hashlib,os,pathlib,shutil,tarfile,urllib.request,zipfile
+          t=pathlib.Path(os.environ['RUNNER_TEMP']);t.mkdir(parents=True,exist_ok=True)
+          def get(url,name,sha):
+              p=t/name
+              with urllib.request.urlopen(url,timeout=120) as r,p.open('wb') as f: shutil.copyfileobj(r,f)
+              a=hashlib.sha256(p.read_bytes()).hexdigest()
+              if a!=sha: raise SystemExit(f'{name}: checksum {a} != {sha}')
+              return p
+          za=os.environ['ZIG_ARCHIVE'];zv='0.16.0';zn=f'zig-{za}-{zv}'+('.zip' if os.name=='nt' else '.tar.xz');zp=get(f'https://ziglang.org/download/{zv}/{zn}',zn,os.environ['ZIG_SHA'])
+          (zipfile.ZipFile(zp).extractall(t) if zp.suffix=='.zip' else tarfile.open(zp).extractall(t,filter='data'))
+          oa=os.environ['ODIN_ARCHIVE'];op=get(f'https://github.com/odin-lang/Odin/releases/download/dev-2026-09/{oa}',oa,os.environ['ODIN_SHA']);od=t/'odin-release';od.mkdir(exist_ok=True);(zipfile.ZipFile(op).extractall(od) if oa.endswith('.zip') else tarfile.open(op).extractall(od,filter='data'))
+          zbin=next(t.rglob('zig.exe' if os.name=='nt' else 'zig'));obin=next(od.rglob('odin.exe' if os.name=='nt' else 'odin'))
+          with open(os.environ['GITHUB_PATH'],'a',encoding='utf-8') as f:f.write(str(zbin.parent)+'\n'+str(obin.parent)+'\n')
+      - name: Build pinned Odin native object
+        shell: bash
+        working-directory: samples/12_c_extensions/12_zig_suite
+        run: odin version && python3 competition/build_odin.py --cpu native
+      - name: Execute portable ABI and semantic suite
+        shell: bash
+        working-directory: samples/12_c_extensions/12_zig_suite
+        run: |
+          set -euo pipefail; mkdir -p "$RUNNER_TEMP/native-platform"; python3 abi/validate.py | tee "$RUNNER_TEMP/native-platform/manifest.json"
+          for mode in Debug ReleaseSafe ReleaseFast; do log="$RUNNER_TEMP/native-platform/portable-$mode.log"; (cd portable && zig build test -Doptimize="$mode" -Dcpu=native -Dodin-object=../competition/odin-out/competitive.o --summary all) 2>&1 | tee "$log"; python3 abi/validate.py --proof "$log"; done
+      - name: Execute existing portable suite on native OS
+        shell: bash
+        working-directory: samples/12_c_extensions/12_zig_suite
+        run: zig build test -Doptimize=ReleaseSafe -Dcpu=native --summary all 2>&1 | tee "$RUNNER_TEMP/native-platform/suite.log"
+      - name: Validate Apple main-thread adapter
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: samples/12_c_extensions/12_zig_suite
+        run: clang -std=c11 -Wall -Wextra -Werror platform/apple_main.c platform/apple_main_test.c -o "$RUNNER_TEMP/apple-main" && "$RUNNER_TEMP/apple-main" | tee "$RUNNER_TEMP/native-platform/apple-main.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with: {name: 'native-platform-${{ matrix.runner }}', path: '${{ runner.temp }}/native-platform', if-no-files-found: warn, retention-days: 30}
